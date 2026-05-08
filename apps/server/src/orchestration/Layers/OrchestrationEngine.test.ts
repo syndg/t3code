@@ -8,7 +8,6 @@ import {
   TurnId,
   type OrchestrationEvent,
   ProviderInstanceId,
-  type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import { Effect, Layer, ManagedRuntime, Metric, Option, Queue, Stream } from "effect";
 import { describe, expect, it } from "vitest";
@@ -172,6 +171,13 @@ describe("OrchestrationEngine", () => {
               return projectionSnapshot;
             }),
           getShellSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: projectionSnapshot.snapshotSequence,
+              projects: [],
+              threads: [],
+              updatedAt: projectionSnapshot.updatedAt,
+            }),
+          getArchivedShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: projectionSnapshot.snapshotSequence,
               projects: [],
