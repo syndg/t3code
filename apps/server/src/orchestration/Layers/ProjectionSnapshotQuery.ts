@@ -349,7 +349,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NULL
-        ORDER BY project_id ASC, archived_at ASC, created_at ASC, thread_id ASC
+        ORDER BY project_id ASC, created_at ASC, thread_id ASC
       `,
   });
 
