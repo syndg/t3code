@@ -105,7 +105,16 @@ export function useThreadActions() {
       const api = readEnvironmentApi(target.environmentId);
       if (!api) return;
       const resolved = resolveThreadTarget(target);
-      if (!resolved) return;
+      if (!resolved) {
+        // Thread not in main store (e.g. archived thread) — dispatch delete directly.
+        await api.orchestration.dispatchCommand({
+          type: "thread.delete",
+          commandId: newCommandId(),
+          threadId: target.threadId,
+        });
+        refreshArchivedThreadsForEnvironment(target.environmentId);
+        return;
+      }
       const { thread, threadRef } = resolved;
       const state = useStore.getState();
       const threads = selectThreadsForEnvironment(state, threadRef.environmentId);
@@ -258,13 +267,12 @@ export function useThreadActions() {
       if (!api) return;
       const localApi = readLocalApi();
       const resolved = resolveThreadTarget(target);
-      if (!resolved) return;
-      const { thread } = resolved;
 
       if (confirmThreadDelete && localApi) {
+        const title = resolved?.thread.title ?? "this thread";
         const confirmed = await localApi.dialogs.confirm(
           [
-            `Delete thread "${thread.title}"?`,
+            `Delete thread "${title}"?`,
             "This permanently clears conversation history for this thread.",
           ].join("\n"),
         );
