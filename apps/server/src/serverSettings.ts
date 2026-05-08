@@ -49,7 +49,8 @@ import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerSecretStore } from "./auth/Services/ServerSecretStore.ts";
-const decodeServerSettings = Schema.decodeEffect(ServerSettings);
+const encodeServerSettings = Schema.encodeEffect(ServerSettings);
+const encodeServerSettingsSync = Schema.encodeSync(ServerSettings);
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -127,17 +128,15 @@ export class ServerSettingsService extends Context.Service<
           getSettings: Ref.get(currentSettingsRef),
           updateSettings: (patch) =>
             Ref.get(currentSettingsRef).pipe(
-              Effect.flatMap((currentSettings) =>
-                decodeServerSettings(applyServerSettingsPatch(currentSettings, patch)).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new ServerSettingsError({
-                        settingsPath: "<memory>",
-                        detail: `failed to normalize server settings: ${SchemaIssue.makeFormatterDefault()(cause.issue)}`,
-                        cause,
-                      }),
-                  ),
-                ),
+              Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
+              Effect.tap((nextSettings) => encodeServerSettings(nextSettings)),
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath: "<memory>",
+                    detail: `failed to normalize server settings: ${SchemaIssue.makeFormatterDefault()(cause.issue)}`,
+                    cause,
+                  }),
               ),
               Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
             ),
@@ -200,7 +199,10 @@ function fallbackTextGenerationProvider(settings: ServerSettings): ServerSetting
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.
-const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set(["textGenerationModelSelection"]);
+const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
+  "automaticGitFetchInterval",
+  "textGenerationModelSelection",
+]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
@@ -431,7 +433,9 @@ const makeServerSettings = Effect.gen(function* () {
     });
 
   const writeSettingsAtomically = (settings: ServerSettings) => {
-    const sparseSettings = stripDefaultServerSettings(settings, DEFAULT_SERVER_SETTINGS) ?? {};
+    const encodedSettings = encodeServerSettingsSync(settings);
+    const encodedDefaults = encodeServerSettingsSync(DEFAULT_SERVER_SETTINGS);
+    const sparseSettings = stripDefaultServerSettings(encodedSettings, encodedDefaults) ?? {};
 
     return writeFileStringAtomically({
       filePath: settingsPath,
@@ -533,7 +537,8 @@ const makeServerSettings = Effect.gen(function* () {
             current,
             applyServerSettingsPatch(current, patch),
           );
-          const next = yield* decodeServerSettings(nextPersisted).pipe(
+          const next = yield* encodeServerSettings(nextPersisted).pipe(
+            Effect.as(nextPersisted),
             Effect.mapError(
               (cause) =>
                 new ServerSettingsError({

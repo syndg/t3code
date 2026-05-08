@@ -1,4 +1,5 @@
 import { GitPullRequestIcon, RefreshCwIcon } from "lucide-react";
+import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import { type ReactNode } from "react";
 import type {
@@ -9,7 +10,9 @@ import type {
   VcsDriverKind,
   VcsDiscoveryItem,
 } from "@t3tools/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
+import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import {
   refreshSourceControlDiscovery,
@@ -26,6 +29,13 @@ import {
   EmptyTitle,
 } from "../ui/empty";
 import { Skeleton } from "../ui/skeleton";
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "../ui/number-field";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -38,7 +48,12 @@ import {
   type Icon,
 } from "../Icons";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import {
+  SettingResetButton,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
 
 const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
   versionControlSystems: [],
@@ -58,6 +73,18 @@ const VCS_ICONS: Partial<Record<VcsDriverKind, Icon>> = {
 };
 
 const SOURCE_CONTROL_SKELETON_ROWS = ["primary", "secondary"] as const;
+const GIT_FETCH_INTERVAL_STEP_SECONDS = 5;
+
+function durationToSeconds(duration: Duration.Duration): number {
+  return Math.round(Duration.toMillis(duration) / 1_000);
+}
+
+function normalizeFetchIntervalSeconds(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(value));
+}
 
 function optionLabel(value: Option.Option<string>): string | null {
   return Option.getOrNull(value);
@@ -324,6 +351,12 @@ function EmptySourceControlDiscovery({
 
 export function SourceControlSettingsPanel() {
   const discovery = useSourceControlDiscovery();
+  const automaticGitFetchInterval = useSettings((settings) => settings.automaticGitFetchInterval);
+  const { updateSettings } = useUpdateSettings();
+  const automaticGitFetchIntervalSeconds = durationToSeconds(automaticGitFetchInterval);
+  const defaultAutomaticGitFetchIntervalSeconds = durationToSeconds(
+    DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
+  );
 
   const result = discovery.data ?? EMPTY_DISCOVERY_RESULT;
   const hasDiscoveryItems =
@@ -354,6 +387,55 @@ export function SourceControlSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection title="Git">
+        <SettingsRow
+          title="Fetch interval"
+          description="Refresh remote branch status in the background. Set this to 0 seconds if Git credentials or security keys should only be prompted by explicit Git actions."
+          status={
+            automaticGitFetchIntervalSeconds === 0
+              ? "Automatic Git fetches disabled"
+              : `Automatic Git fetches run every ${automaticGitFetchIntervalSeconds} seconds`
+          }
+          resetAction={
+            automaticGitFetchIntervalSeconds !== defaultAutomaticGitFetchIntervalSeconds ? (
+              <SettingResetButton
+                label="fetch interval"
+                onClick={() =>
+                  updateSettings({
+                    automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex items-center gap-2">
+              <NumberField
+                value={automaticGitFetchIntervalSeconds}
+                min={0}
+                step={GIT_FETCH_INTERVAL_STEP_SECONDS}
+                size="sm"
+                className="w-28"
+                onValueChange={(value) =>
+                  updateSettings({
+                    automaticGitFetchInterval: Duration.seconds(
+                      normalizeFetchIntervalSeconds(value),
+                    ),
+                  })
+                }
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement aria-label="Decrease fetch interval" />
+                  <NumberFieldInput aria-label="Automatic Git fetch interval in seconds" />
+                  <NumberFieldIncrement aria-label="Increase fetch interval" />
+                </NumberFieldGroup>
+              </NumberField>
+              <span className="text-xs text-muted-foreground">seconds</span>
+            </div>
+          }
+        />
+      </SettingsSection>
+
       {isInitialScanPending ? (
         <>
           <SourceControlSectionSkeleton title="Version Control" headerAction={scanButton} />
