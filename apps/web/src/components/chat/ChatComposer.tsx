@@ -606,16 +606,15 @@ export const ChatComposer = memo(
       () => sortProviderInstanceEntries(deriveProviderInstanceEntries(providerStatuses)),
       [providerStatuses],
     );
-    const providerInstanceEntryById = useMemo<ReadonlyMap<ProviderInstanceId, ProviderInstanceEntry>>(
-      () => {
-        const entriesById = new Map<ProviderInstanceId, ProviderInstanceEntry>();
-        for (const entry of providerInstanceEntries) {
-          entriesById.set(entry.instanceId, entry);
-        }
-        return entriesById;
-      },
-      [providerInstanceEntries],
-    );
+    const providerInstanceEntryById = useMemo<
+      ReadonlyMap<ProviderInstanceId, ProviderInstanceEntry>
+    >(() => {
+      const entriesById = new Map<ProviderInstanceId, ProviderInstanceEntry>();
+      for (const entry of providerInstanceEntries) {
+        entriesById.set(entry.instanceId, entry);
+      }
+      return entriesById;
+    }, [providerInstanceEntries]);
     const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
     const threadProvider =
       activeThread?.session?.providerInstanceId ??
@@ -1678,56 +1677,59 @@ export const ChatComposer = memo(
     // ------------------------------------------------------------------
     // Callbacks: images
     // ------------------------------------------------------------------
-    const addComposerImages = useCallback((files: File[]) => {
-      if (!activeThreadId || files.length === 0) return;
-      if (pendingUserInputs.length > 0) {
-        toastManager.add({
-          type: "error",
-          title: "Attach images after answering plan questions.",
-        });
-        return;
-      }
-      const nextImages: ComposerImageAttachment[] = [];
-      let nextImageCount = composerImagesRef.current.length;
-      let error: string | null = null;
-      for (const file of files) {
-        if (!file.type.startsWith("image/")) {
-          error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
-          continue;
+    const addComposerImages = useCallback(
+      (files: File[]) => {
+        if (!activeThreadId || files.length === 0) return;
+        if (pendingUserInputs.length > 0) {
+          toastManager.add({
+            type: "error",
+            title: "Attach images after answering plan questions.",
+          });
+          return;
         }
-        if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-          error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
-          continue;
+        const nextImages: ComposerImageAttachment[] = [];
+        let nextImageCount = composerImagesRef.current.length;
+        let error: string | null = null;
+        for (const file of files) {
+          if (!file.type.startsWith("image/")) {
+            error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
+            continue;
+          }
+          if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+            error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
+            continue;
+          }
+          if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+            error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
+            break;
+          }
+          const previewUrl = URL.createObjectURL(file);
+          nextImages.push({
+            type: "image",
+            id: randomUUID(),
+            name: file.name || "image",
+            mimeType: file.type,
+            sizeBytes: file.size,
+            previewUrl,
+            file,
+          });
+          nextImageCount += 1;
         }
-        if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-          error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
-          break;
+        if (nextImages.length === 1 && nextImages[0]) {
+          addComposerImage(nextImages[0]);
+        } else if (nextImages.length > 1) {
+          addComposerImagesToDraft(nextImages);
         }
-        const previewUrl = URL.createObjectURL(file);
-        nextImages.push({
-          type: "image",
-          id: randomUUID(),
-          name: file.name || "image",
-          mimeType: file.type,
-          sizeBytes: file.size,
-          previewUrl,
-          file,
-        });
-        nextImageCount += 1;
-      }
-      if (nextImages.length === 1 && nextImages[0]) {
-        addComposerImage(nextImages[0]);
-      } else if (nextImages.length > 1) {
-        addComposerImagesToDraft(nextImages);
-      }
-      setThreadError(activeThreadId, error);
-    }, [
-      activeThreadId,
-      addComposerImage,
-      addComposerImagesToDraft,
-      pendingUserInputs.length,
-      setThreadError,
-    ]);
+        setThreadError(activeThreadId, error);
+      },
+      [
+        activeThreadId,
+        addComposerImage,
+        addComposerImagesToDraft,
+        pendingUserInputs.length,
+        setThreadError,
+      ],
+    );
 
     const removeComposerImage = (imageId: string) => {
       removeComposerImageFromDraft(imageId);
