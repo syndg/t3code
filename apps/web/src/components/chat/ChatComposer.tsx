@@ -1726,6 +1726,7 @@ export const ChatComposer = memo(
         activeThreadId,
         addComposerImage,
         addComposerImagesToDraft,
+        composerImagesRef,
         pendingUserInputs.length,
         setThreadError,
       ],
