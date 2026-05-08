@@ -1334,7 +1334,10 @@ export function ArchivedThreadsPanel() {
       .map((project) => ({
         project,
         threads: threads
-          .filter((thread) => thread.projectId === project.id)
+          .filter(
+            (thread) =>
+              thread.projectId === project.id && thread.environmentId === project.environmentId,
+          )
           .toSorted((left, right) => {
             const leftKey = left.archivedAt ?? left.createdAt;
             const rightKey = right.archivedAt ?? right.createdAt;
