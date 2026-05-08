@@ -1310,7 +1310,10 @@ export function ArchivedThreadsPanel() {
     [projects],
   );
 
+  const refreshIdRef = useRef(0);
+
   const refreshArchivedThreads = useCallback(async () => {
+    const id = ++refreshIdRef.current;
     setIsLoadingArchive(true);
     try {
       const snapshots = await Promise.all(
@@ -1325,9 +1328,13 @@ export function ArchivedThreadsPanel() {
           };
         }),
       );
-      setArchivedSnapshots(snapshots.filter((snapshot) => snapshot !== null));
+      if (id === refreshIdRef.current) {
+        setArchivedSnapshots(snapshots.filter((snapshot) => snapshot !== null));
+      }
     } finally {
-      setIsLoadingArchive(false);
+      if (id === refreshIdRef.current) {
+        setIsLoadingArchive(false);
+      }
     }
   }, [environmentIds]);
 
