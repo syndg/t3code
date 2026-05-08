@@ -301,6 +301,34 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(processLayer));
   });
 
+  it.effect("accepts pretty-printed pairing JSON after remote shell startup noise", () => {
+    const target = {
+      alias: "devbox",
+      hostname: "devbox.example.com",
+      username: "julius",
+      port: 2222,
+    } as const;
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        makeSuccessfulProcess(`loaded nvm default
+{
+  "id": "88941235-6ed5-4184-a2ff-5339e2075958",
+  "credential": "LCL4R2TPHDKQ",
+  "role": "client",
+  "expiresAt": "2026-04-29T01:01:20.994Z"
+}
+
+`),
+      ),
+    );
+    const spawnerLayer = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
+    const processLayer = Layer.merge(NodeServices.layer, spawnerLayer);
+    return Effect.gen(function* () {
+      const result = yield* issueRemotePairingToken(target);
+      assert.equal(result.credential, "LCL4R2TPHDKQ");
+    }).pipe(Effect.provide(processLayer));
+  });
+
   it.effect("closes the tunnel scope and starts fresh after disconnect", () => {
     const spawnedCommands: Array<ReadonlyArray<string>> = [];
     let tunnelKillCount = 0;

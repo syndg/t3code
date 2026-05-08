@@ -167,27 +167,44 @@ const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunc
 const decodeRemotePairingResult = Schema.decodeEffect(fromLenientJson(RemotePairingResult));
 const decodeRemoteHttpError = Schema.decodeEffect(Schema.fromJsonString(RemoteHttpError));
 
-const decodeRemoteLaunchOutput = (stdout: string) =>
-  decodeRemoteLaunchResult(stdout).pipe(
-    Effect.catch((cause) => {
-      const lastLine = getLastNonEmptyOutputLine(stdout);
-      if (lastLine === null || lastLine === stdout.trim()) {
-        return Effect.fail(cause);
+function getJsonOutputSuffixCandidates(stdout: string): ReadonlyArray<string> {
+  const trimmed = stdout.trim();
+  const candidates: Array<string> = [];
+  for (let index = trimmed.length - 1; index >= 0; index -= 1) {
+    const char = trimmed[index];
+    if (char === "{" || char === "[") {
+      const candidate = trimmed.slice(index);
+      if (candidate !== trimmed) {
+        candidates.push(candidate);
       }
-      return decodeRemoteLaunchResult(lastLine);
-    }),
+    }
+  }
+  return candidates;
+}
+
+const decodeRemoteJsonOutput = <A, E>(
+  stdout: string,
+  decode: (input: string) => Effect.Effect<A, E>,
+): Effect.Effect<A, E> =>
+  decode(stdout).pipe(
+    Effect.catch((error) =>
+      Effect.gen(function* () {
+        for (const candidate of getJsonOutputSuffixCandidates(stdout)) {
+          const exit = yield* Effect.exit(decode(candidate));
+          if (Exit.isSuccess(exit)) {
+            return exit.value;
+          }
+        }
+        return yield* Effect.fail(error);
+      }),
+    ),
   );
 
+const decodeRemoteLaunchOutput = (stdout: string) =>
+  decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
+
 const decodeRemotePairingOutput = (stdout: string) =>
-  decodeRemotePairingResult(stdout).pipe(
-    Effect.catch((cause) => {
-      const lastLine = getLastNonEmptyOutputLine(stdout);
-      if (lastLine === null || lastLine === stdout.trim()) {
-        return Effect.fail(cause);
-      }
-      return decodeRemotePairingResult(lastLine);
-    }),
-  );
+  decodeRemoteJsonOutput(stdout, decodeRemotePairingResult);
 
 export function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): string {
   const cleaned = stderr.trim();
