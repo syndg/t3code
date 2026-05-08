@@ -2668,12 +2668,13 @@ export function ConnectionsSettings() {
                   <DialogTrigger
                     render={
                       <Button
-                        size="icon-xs"
+                        size="xs"
                         variant="ghost"
-                        className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                        className="h-5 gap-1 rounded-sm px-1 text-[11px] font-normal text-muted-foreground/60 hover:text-muted-foreground"
                         aria-label="Add environment"
                       >
                         <PlusIcon className="size-3" />
+                        <span>Add environment</span>
                       </Button>
                     }
                   />
