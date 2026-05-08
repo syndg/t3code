@@ -32,7 +32,7 @@ This document covers the unified release workflow for stable and nightly desktop
 ## Hosted web app release deployment
 
 The hosted app is intentionally not deployed by Vercel's Git integration. The
-web project disables automatic Git deployments in `apps/web/vercel.json` via
+web project disables automatic Git deployments in `apps/web/vercel.ts` via
 `git.deploymentEnabled: false`, and `.github/workflows/release.yml` deploys the
 web app with Vercel CLI after the GitHub Release succeeds.
 
@@ -55,9 +55,9 @@ Required Vercel domains:
 - `latest.app.t3.codes`: channel alias updated by stable releases.
 - `nightly.app.t3.codes`: channel alias updated by nightly releases.
 
-The router domain runs `apps/web/middleware.ts`. Users opt into a channel by
+The router domain uses `apps/web/vercel.ts` routes. Users opt into a channel by
 visiting `/__t3code/channel?channel=latest` or
-`/__t3code/channel?channel=nightly`; the middleware stores the
+`/__t3code/channel?channel=nightly`; the router stores the
 `t3code_web_channel` cookie and rewrites future requests on `app.t3.codes` to
 the matching channel alias.
 
@@ -73,9 +73,9 @@ One-time Vercel dashboard setup:
 1. Confirm the web project root directory remains `apps/web`.
 2. Add the three domains above to the web project.
 3. Disable automatic Git deployments in the dashboard if desired; the committed
-   `vercel.json` setting is the source-of-truth, but disconnecting Git in the
+   `vercel.ts` setting is the source-of-truth, but disconnecting Git in the
    dashboard is also safe.
-4. Promote or alias one deployment containing `apps/web/middleware.ts` to
+4. Promote or alias one deployment containing the router rules in `apps/web/vercel.ts` to
    `app.t3.codes` once. Future release jobs should only update the channel
    aliases.
 
