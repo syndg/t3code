@@ -703,6 +703,12 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
                 },
               );
             }
+            // Older tabs may lazy-load chunks after reconnecting. Keep their hashed assets.
+            await NodeFSP.cp(
+              NodePath.join(previous, "apps/server/dist/client/assets"),
+              NodePath.join(candidate, "apps/server/dist/client/assets"),
+              { recursive: true, force: false },
+            );
             await NodeFSP.access(NodePath.join(candidate, "apps/server/dist/client/index.html"));
             const entry = NodePath.join(candidate, "apps/server/dist/bin.mjs");
             const validationHome = NodePath.join(candidate, ".t3-validation");

@@ -10,8 +10,11 @@ const commit = NodeChildProcess.execFileSync("git", ["rev-parse", "HEAD"], {
 const env = {
   ...process.env,
   APP_VERSION: version,
+  T3CODE_WEB_ASSET_BASE: process.env.VERCEL_URL
+    ? `/__build/${process.env.VERCEL_URL.replace(/\.vercel\.app$/, "")}/`
+    : "/",
   VITE_HOSTED_APP_CHANNEL: "nightly",
-  VITE_HOSTED_APP_URL: "https://t3code-omp.vercel.app",
+  VITE_HOSTED_APP_URL: "https://t3.syndg.dev",
 };
 NodeChildProcess.execFileSync(
   "node_modules/.bin/vp",

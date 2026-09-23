@@ -155,6 +155,8 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    // Pin hosted assets to their immutable deployment so open tabs survive a rollout.
+    base: process.env.T3CODE_WEB_ASSET_BASE || "/",
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
