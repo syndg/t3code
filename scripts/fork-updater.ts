@@ -530,7 +530,9 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
       [
         "exec",
         "--model",
-        "gpt-6-sol",
+        "gpt-6-astra",
+        "-c",
+        'model_reasoning_effort="medium"',
         "--sandbox",
         "workspace-write",
         "--color",
