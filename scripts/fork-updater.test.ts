@@ -15,6 +15,7 @@ import {
   assertForkAncestry,
   assertForkService,
   assertPublishedForkNightly,
+  assertStagedForkDiff,
   forkCodexEnvironment,
 } from "./fork-updater.ts";
 
@@ -165,6 +166,42 @@ it("requires both the fork source and exact nightly ancestry in a real git workt
   await assertForkAncestry(fixture.root, fork, nightly);
   git("checkout", "nightly");
   await expect(assertForkAncestry(fixture.root, fork, nightly)).rejects.toThrow("must descend");
+});
+
+it("ignores whitespace already in the published nightly but rejects fork whitespace", async () => {
+  const fixture = await deploymentFixture();
+  const git = (...args: string[]) =>
+    NodeChildProcess.execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: fixture.root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Updater test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Updater test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    }).trim();
+  git("init", "--initial-branch=main");
+  git("commit", "--allow-empty", "-m", "base");
+  git("branch", "nightly");
+  await NodeFSP.writeFile(NodePath.join(fixture.root, "fork.txt"), "fork\n");
+  git("add", "fork.txt");
+  git("commit", "-m", "fork");
+  git("checkout", "nightly");
+  await NodeFSP.writeFile(NodePath.join(fixture.root, "upstream.patch"), "+ \n");
+  git("add", "upstream.patch");
+  git("commit", "-m", "published nightly");
+  const nightly = git("rev-parse", "HEAD");
+  git("checkout", "main");
+  git("merge", "--no-ff", "--no-commit", "nightly");
+
+  expect(() => git("diff", "--cached", "--check")).toThrow();
+  await assertStagedForkDiff(fixture.root, nightly);
+
+  await NodeFSP.writeFile(NodePath.join(fixture.root, "fork.txt"), "fork \n");
+  git("add", "fork.txt");
+  await expect(assertStagedForkDiff(fixture.root, nightly)).rejects.toThrow("whitespace");
 });
 
 it("accepts only the exact published nightly, never a draft, preview, or mutable channel", () => {

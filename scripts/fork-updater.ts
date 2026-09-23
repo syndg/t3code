@@ -250,6 +250,20 @@ export async function assertForkAncestry(
   if (unresolved.stdout) throw new Error("The fork still has unresolved merge conflicts.");
 }
 
+export async function assertStagedForkDiff(directory: string, upstreamCommit: string): Promise<void> {
+  const run = commandRunner(() => {});
+  const unresolved = await run("git", ["ls-files", "--unmerged"], { cwd: directory });
+  if (unresolved.stdout) throw new Error("Codex left unresolved merge conflicts.");
+  // The merge stages upstream files too. Check only the fork's delta so an
+  // unchanged upstream patch containing intentional whitespace cannot block it.
+  const diff = await run("git", ["diff", "--cached", upstreamCommit, "--check"], {
+    cwd: directory,
+    allowFailure: true,
+  });
+  if (diff.code !== 0)
+    throw new Error(`The fork delta has conflict markers or whitespace errors: ${diff.stdout}`);
+}
+
 async function fetchDescriptor(url = DESCRIPTOR_URL) {
   const response = await fetch(url, { signal: AbortSignal.timeout(5000), redirect: "error" });
   if (!response.ok) throw new Error(`Fork readiness returned HTTP ${response.status}.`);
@@ -538,11 +552,7 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
       { cwd: candidate, env, timeout: 60 * 60_000 },
     );
     await git(["add", "--all"]);
-    if ((await git(["ls-files", "--unmerged"])).stdout)
-      throw new Error("Codex left unresolved merge conflicts.");
-    const diff = await git(["diff", "--cached", "--check"], true);
-    if (diff.code !== 0)
-      throw new Error(`The merge has conflict markers or whitespace errors: ${diff.stdout}`);
+    await assertStagedForkDiff(candidate, target);
     await git([
       "commit",
       "--allow-empty",
