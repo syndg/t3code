@@ -98,7 +98,7 @@ function commandRunner(log: (text: string) => void): RunCommand {
       if (timedOut || (code !== 0 && !options.allowFailure)) {
         reject(
           new Error(
-            `${NodePath.basename(command)} ${args[0] ?? ""} ${timedOut ? "timed out" : `failed (${code})`}: ${stderr.slice(-4000)}`,
+            `${NodePath.basename(command)} ${args[0] ?? ""} ${timedOut ? "timed out" : `failed (${code})`}: ${(stderr || stdout).slice(-4000)}`,
           ),
         );
       } else {
@@ -250,7 +250,10 @@ export async function assertForkAncestry(
   if (unresolved.stdout) throw new Error("The fork still has unresolved merge conflicts.");
 }
 
-export async function assertStagedForkDiff(directory: string, upstreamCommit: string): Promise<void> {
+export async function assertStagedForkDiff(
+  directory: string,
+  upstreamCommit: string,
+): Promise<void> {
   const run = commandRunner(() => {});
   const unresolved = await run("git", ["ls-files", "--unmerged"], { cwd: directory });
   if (unresolved.stdout) throw new Error("Codex left unresolved merge conflicts.");
@@ -262,6 +265,29 @@ export async function assertStagedForkDiff(directory: string, upstreamCommit: st
   });
   if (diff.code !== 0)
     throw new Error(`The fork delta has conflict markers or whitespace errors: ${diff.stdout}`);
+}
+
+/** Keep repair and validation in staging; activation runs only after this succeeds. */
+export async function validateForkWithRepairs(input: {
+  prepare: (failure: unknown, attempt: number) => Promise<void>;
+  validate: () => Promise<void>;
+}): Promise<void> {
+  let failure: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await input.prepare(failure, attempt);
+    try {
+      await input.validate();
+      return;
+    } catch (error) {
+      failure = error;
+      if (attempt === 3) {
+        throw new Error(
+          `Validation still failed after two repair attempts: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+    }
+  }
 }
 
 async function fetchDescriptor(url = DESCRIPTOR_URL) {
@@ -524,182 +550,258 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
     const merge = await git(["merge", "--no-ff", "--no-commit", target], true);
     if (merge.code !== 0 && !(await git(["ls-files", "--unmerged"])).stdout)
       throw new Error(`Git could not merge the nightly: ${merge.stderr}`);
-    await state("updating", "Codex is merging the nightly while preserving OMP support.");
-    await run(
-      config.codexBinary,
-      [
-        "exec",
-        "--model",
-        "gpt-6-astra",
-        "-c",
-        'model_reasoning_effort="medium"',
-        "--sandbox",
-        "workspace-write",
-        "--color",
-        "never",
-        "-c",
-        'approval_policy="never"',
-        "-c",
-        'forced_login_method="chatgpt"',
-        "-c",
-        "sandbox_workspace_write.writable_roots=[]",
-        "-c",
-        "sandbox_workspace_write.network_access=false",
-        "-c",
-        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-        "-c",
-        "sandbox_workspace_write.exclude_slash_tmp=true",
-        "-C",
+    const prepare = async (failure: unknown, attempt: number) => {
+      const diagnosticPath = NodePath.join(
         candidate,
-        `Update this T3 Code fork to published upstream nightly v${version} (commit ${target}). A merge from fork commit ${source} is already staged, possibly conflicted. Resolve conflicts and adapt code as needed. Preserve every fork change, particularly OMP provider contracts, settings, driver/adapter, focused tests, and the complete nightly fork updater/server/client UI. Inspect the fork diff against upstream so nothing is silently lost. Only edit this checkout. Do not commit, fetch, change branches, modify other checkouts, access live T3 data, deploy, switch symlinks, invoke systemctl/systemd-run, run validation/build/test/format/lint commands, or change Codex configuration. Do not weaken tests or validation gates. The parent worker owns validation and activation. Leave the merged source ready for its deterministic checks.`,
-      ],
-      { cwd: candidate, env, timeout: 60 * 60_000 },
-    );
-    await git(["add", "--all"]);
-    await assertStagedForkDiff(candidate, target);
-    await git([
-      "commit",
-      "--allow-empty",
-      "-m",
-      `Merge upstream nightly v${version} into OMP fork`,
-    ]);
-    await assertForkAncestry(candidate, source, target);
+        "node_modules/.cache/t3-fork-updater/validation.log",
+      );
+      if (failure !== undefined) {
+        await NodeFSP.mkdir(NodePath.dirname(diagnosticPath), { recursive: true });
+        await NodeFSP.copyFile(paths.log, diagnosticPath);
+      }
+      await state(
+        "updating",
+        failure === undefined
+          ? "Codex is merging the nightly while preserving OMP support."
+          : `Codex is repairing validation failures (attempt ${attempt} of 3).`,
+      );
+      await run(
+        config.codexBinary,
+        [
+          "exec",
+          "--model",
+          "gpt-6-astra",
+          "-c",
+          'model_reasoning_effort="medium"',
+          "--sandbox",
+          "workspace-write",
+          "--color",
+          "never",
+          "-c",
+          'approval_policy="never"',
+          "-c",
+          'forced_login_method="chatgpt"',
+          "-c",
+          "sandbox_workspace_write.writable_roots=[]",
+          "-c",
+          "sandbox_workspace_write.network_access=false",
+          "-c",
+          "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+          "-c",
+          "sandbox_workspace_write.exclude_slash_tmp=true",
+          "-C",
+          candidate,
+          `Update this T3 Code fork to published upstream nightly v${version} (commit ${target}). A merge from fork commit ${source} is already staged, possibly conflicted. Resolve conflicts and adapt code as needed. Preserve every fork change, particularly OMP provider contracts, settings, driver/adapter, focused tests, and the complete nightly fork updater/server/client UI. Inspect the fork diff against upstream so nothing is silently lost. Only edit this checkout. Do not commit, fetch, change branches, modify other checkouts, access live T3 data, deploy, switch symlinks, invoke systemctl/systemd-run, run validation/build/test/format/lint commands, or change Codex configuration. Do not weaken tests or validation gates. The parent worker owns validation and activation. Leave the merged source ready for its deterministic checks. Preserve Astra medium, the composer update banner, automatic reconnect and optional UI reload. ${failure === undefined ? "" : `The previous validation failed: ${failure instanceof Error ? failure.message : String(failure)}. Full validation output is in ${diagnosticPath}. Repair the cause in this checkout. Dependencies may now be installed. Do not weaken or skip checks.`}`,
+        ],
+        { cwd: candidate, env, timeout: 60 * 60_000 },
+      );
+    };
     await activateForkBuild({
       current: paths.current,
       candidate,
-      validate: async () => {
-        await state("updating", "Installing dependencies and validating the OMP fork.");
-        const sourceVp = NodePath.join(config.repository, "node_modules/.bin/vp");
-        const publicEnv = loadRepoEnv({ repoRoot: config.repository });
-        const buildEnv: NodeJS.ProcessEnv = {
-          ...env,
-          CI: "1",
-          npm_config_engine_strict: "false",
-          APP_VERSION: version,
-          // This build is served by the fork itself. A hosted channel makes the
-          // client skip its same-origin primary environment and appear empty.
-          VITE_HOSTED_APP_CHANNEL: "",
-          T3CODE_HOME: NodePath.join(candidate, ".t3-validation"),
-          ...Object.fromEntries(
-            Object.entries(publicEnv).filter(([key]) =>
-              /^(?:T3CODE_CLERK_(?:PUBLISHABLE_KEY|CLI_OAUTH_CLIENT_ID|JWT_TEMPLATE)|T3CODE_RELAY_URL)$/.test(
-                key,
+      validate: () =>
+        validateForkWithRepairs({
+          prepare,
+          validate: async () => {
+            await git(["add", "--all"]);
+            await assertStagedForkDiff(candidate, target);
+            await git([
+              "commit",
+              "--allow-empty",
+              "-m",
+              `Merge upstream nightly v${version} into OMP fork`,
+            ]);
+            await assertForkAncestry(candidate, source, target);
+
+            await state("updating", "Installing dependencies and validating the OMP fork.");
+            const sourceVp = NodePath.join(config.repository, "node_modules/.bin/vp");
+            const publicEnv = loadRepoEnv({ repoRoot: config.repository });
+            const buildEnv: NodeJS.ProcessEnv = {
+              ...env,
+              CI: "1",
+              npm_config_engine_strict: "false",
+              APP_VERSION: version,
+              // This build is served by the fork itself. A hosted channel makes the
+              // client skip its same-origin primary environment and appear empty.
+              VITE_HOSTED_APP_CHANNEL: "",
+              T3CODE_HOME: NodePath.join(candidate, ".t3-validation"),
+              ...Object.fromEntries(
+                Object.entries(publicEnv).filter(([key]) =>
+                  /^(?:T3CODE_CLERK_(?:PUBLISHABLE_KEY|CLI_OAUTH_CLIENT_ID|JWT_TEMPLATE)|T3CODE_RELAY_URL)$/.test(
+                    key,
+                  ),
+                ),
               ),
-            ),
-          ),
-        };
-        await run(sourceVp, ["install", "--frozen-lockfile"], { cwd: candidate, env: buildEnv });
-        const vp = NodePath.join(candidate, "node_modules/.bin/vp");
-        await run(config.nodeBinary, ["scripts/update-release-package-versions.ts", version], {
-          cwd: candidate,
-          env: buildEnv,
-        });
-        await git(["add", "--all"]);
-        await git(["commit", "--allow-empty", "-m", `Stamp OMP fork nightly ${version}`]);
-        const validatedHead = (await git(["rev-parse", "HEAD"])).stdout;
-        for (const required of [
-          "scripts/fork-updater.ts",
-          "packages/shared/src/forkUpdater.ts",
-          "apps/server/src/provider/Drivers/OmpDriver.ts",
-          "apps/server/src/provider/Layers/OmpAdapter.ts",
-          "apps/server/src/provider/Drivers/OmpDriver.test.ts",
-          "apps/server/src/provider/Layers/OmpAdapter.test.ts",
-          "scripts/fork-updater.test.ts",
-        ]) {
-          await NodeFSP.access(NodePath.join(candidate, required));
-        }
-        await run(
-          vp,
-          [
-            "test",
-            "run",
-            "apps/server/src/provider/Drivers/OmpDriver.test.ts",
-            "apps/server/src/provider/Layers/OmpAdapter.test.ts",
-            "scripts/fork-updater.test.ts",
-            "apps/server/src/cloud/forkUpdater.test.ts",
-            "apps/server/src/cloud/selfUpdate.test.ts",
-            "packages/client-runtime/src/rpc/session.test.ts",
-            "apps/web/src/components/sidebar/SidebarForkUpdateNotice.test.tsx",
-          ],
-          { cwd: candidate, env: buildEnv },
-        );
-        await run(
-          vp,
-          [
-            "run",
-            "--filter",
-            "@t3tools/contracts",
-            "--filter",
-            "@t3tools/shared",
-            "--filter",
-            "@t3tools/client-runtime",
-            "--filter",
-            "@t3tools/scripts",
-            "--filter",
-            "@t3tools/web",
-            "--filter",
-            "t3",
-            "typecheck",
-          ],
-          { cwd: candidate, env: buildEnv },
-        );
-        await state("updating", "Building the nightly web client and server.");
-        await run(vp, ["run", "--filter", "t3", "build"], { cwd: candidate, env: buildEnv });
-        for (const output of ["apps/web/dist", "apps/server/dist/client"]) {
-          await run(config.nodeBinary, ["scripts/apply-web-brand-assets.ts", "nightly", output], {
-            cwd: candidate,
-            env: buildEnv,
-          });
-        }
-        await NodeFSP.access(NodePath.join(candidate, "apps/server/dist/client/index.html"));
-        const entry = NodePath.join(candidate, "apps/server/dist/bin.mjs");
-        const validationHome = NodePath.join(candidate, ".t3-validation");
-        await NodeFSP.rm(validationHome, { recursive: true, force: true });
-        const database = NodePath.join(validationHome, "userdata", "state.sqlite");
-        await NodeFSP.mkdir(NodePath.dirname(database), { recursive: true, mode: 0o700 });
-        const sourceDb = new NodeSqlite.DatabaseSync(
-          NodePath.join(config.baseDir, "userdata/state.sqlite"),
-          { readOnly: true },
-        );
-        try {
-          sourceDb.prepare("VACUUM INTO ?").run(database);
-        } finally {
-          sourceDb.close();
-        }
-        try {
-          const preflight = await run(
-            config.nodeBinary,
-            [entry, "__service-preflight", "--database-path", database, "--launcher-protocol", "3"],
-            { cwd: candidate, env: buildEnv, timeout: 60_000 },
-          );
-          const result = decodePreflight(preflight.stdout);
-          if (result.version !== version)
-            throw new Error("The built server preflight reported the wrong version.");
-          await state("updating", "Testing startup and database migrations on an isolated copy.");
-          await smokeCandidateFork({
-            nodeBinary: config.nodeBinary,
-            candidate,
-            validationHome,
-            version,
-            env: buildEnv,
-            log,
-          });
-        } finally {
-          await NodeFSP.rm(validationHome, { recursive: true, force: true });
-        }
-        await assertForkAncestry(candidate, source, target);
-        if (
-          (await git(["rev-parse", "HEAD"])).stdout !== validatedHead ||
-          (await git(["status", "--porcelain"])).stdout
-        ) {
-          throw new Error(
-            "Validation changed the committed source; refusing to activate an unvalidated build.",
-          );
-        }
-      },
+            };
+            await run(sourceVp, ["install", "--frozen-lockfile"], {
+              cwd: candidate,
+              env: buildEnv,
+            });
+            const vp = NodePath.join(candidate, "node_modules/.bin/vp");
+            await run(config.nodeBinary, ["scripts/update-release-package-versions.ts", version], {
+              cwd: candidate,
+              env: buildEnv,
+            });
+            await git(["add", "--all"]);
+            await git(["commit", "--allow-empty", "-m", `Stamp OMP fork nightly ${version}`]);
+            const validatedHead = (await git(["rev-parse", "HEAD"])).stdout;
+            for (const required of [
+              "scripts/fork-updater.ts",
+              "packages/shared/src/forkUpdater.ts",
+              "apps/server/src/provider/Drivers/OmpDriver.ts",
+              "apps/server/src/provider/Layers/OmpAdapter.ts",
+              "apps/server/src/provider/Drivers/OmpDriver.test.ts",
+              "apps/server/src/provider/Layers/OmpAdapter.test.ts",
+              "scripts/fork-updater.test.ts",
+            ]) {
+              await NodeFSP.access(NodePath.join(candidate, required));
+            }
+            await run(
+              vp,
+              [
+                "test",
+                "run",
+                "apps/server/src/provider/Drivers/OmpDriver.test.ts",
+                "apps/server/src/provider/Layers/OmpAdapter.test.ts",
+                "scripts/fork-updater.test.ts",
+                "apps/server/src/cloud/forkUpdater.test.ts",
+                "apps/server/src/cloud/selfUpdate.test.ts",
+                "packages/client-runtime/src/rpc/session.test.ts",
+                "apps/web/src/components/chat/useForkUpdateBanners.test.tsx",
+              ],
+              { cwd: candidate, env: buildEnv },
+            );
+            await run(
+              vp,
+              [
+                "run",
+                "--filter",
+                "@t3tools/contracts",
+                "--filter",
+                "@t3tools/shared",
+                "--filter",
+                "@t3tools/client-runtime",
+                "--filter",
+                "@t3tools/scripts",
+                "--filter",
+                "@t3tools/web",
+                "--filter",
+                "t3",
+                "typecheck",
+              ],
+              { cwd: candidate, env: buildEnv },
+            );
+            await state("updating", "Building the nightly web client and server.");
+            await run(vp, ["run", "--filter", "t3", "build"], { cwd: candidate, env: buildEnv });
+            for (const output of ["apps/web/dist", "apps/server/dist/client"]) {
+              await run(
+                config.nodeBinary,
+                ["scripts/apply-web-brand-assets.ts", "nightly", output],
+                {
+                  cwd: candidate,
+                  env: buildEnv,
+                },
+              );
+            }
+            await NodeFSP.access(NodePath.join(candidate, "apps/server/dist/client/index.html"));
+            const entry = NodePath.join(candidate, "apps/server/dist/bin.mjs");
+            const validationHome = NodePath.join(candidate, ".t3-validation");
+            await NodeFSP.rm(validationHome, { recursive: true, force: true });
+            const database = NodePath.join(validationHome, "userdata", "state.sqlite");
+            await NodeFSP.mkdir(NodePath.dirname(database), { recursive: true, mode: 0o700 });
+            const sourceDb = new NodeSqlite.DatabaseSync(
+              NodePath.join(config.baseDir, "userdata/state.sqlite"),
+              { readOnly: true },
+            );
+            try {
+              sourceDb.prepare("VACUUM INTO ?").run(database);
+            } finally {
+              sourceDb.close();
+            }
+            try {
+              const preflight = await run(
+                config.nodeBinary,
+                [
+                  entry,
+                  "__service-preflight",
+                  "--database-path",
+                  database,
+                  "--launcher-protocol",
+                  "3",
+                ],
+                { cwd: candidate, env: buildEnv, timeout: 60_000 },
+              );
+              const result = decodePreflight(preflight.stdout);
+              if (result.version !== version)
+                throw new Error("The built server preflight reported the wrong version.");
+              await state(
+                "updating",
+                "Testing startup and database migrations on an isolated copy.",
+              );
+              await smokeCandidateFork({
+                nodeBinary: config.nodeBinary,
+                candidate,
+                validationHome,
+                version,
+                env: buildEnv,
+                log,
+              });
+            } finally {
+              await NodeFSP.rm(validationHome, { recursive: true, force: true });
+            }
+            await assertForkAncestry(candidate, source, target);
+            if (
+              (await git(["rev-parse", "HEAD"])).stdout !== validatedHead ||
+              (await git(["status", "--porcelain"])).stdout
+            ) {
+              throw new Error(
+                "Validation changed the committed source; refusing to activate an unvalidated build.",
+              );
+            }
+          },
+        }),
       beforeSwitch: async () => {
         await verifyService(run);
-        await state("updating", "Validation passed. Activating the nightly fork build.");
+        if (config.webDeployment) {
+          await state("updating", "Validation passed. Publishing the web client to Vercel.");
+          const web = config.webDeployment;
+          const commit = (await git(["rev-parse", "HEAD"])).stdout;
+          const branchRef = `refs/heads/${web.gitBranch}`;
+          const remoteHead =
+            (await git(["ls-remote", web.gitRemote, branchRef])).stdout.split(/\s+/)[0] ?? "";
+          await git([
+            "push",
+            `--force-with-lease=${branchRef}:${remoteHead}`,
+            web.gitRemote,
+            `HEAD:${branchRef}`,
+          ]);
+          const deadline = Date.now() + 15 * 60_000;
+          let deployed = false;
+          while (Date.now() < deadline) {
+            try {
+              const response = await fetch(new URL(`/fork-build.json?commit=${commit}`, web.url), {
+                signal: AbortSignal.timeout(10_000),
+                cache: "no-store",
+              });
+              const build = response.ok ? ((await response.json()) as { commit?: string }) : null;
+              if (build?.commit === commit) {
+                deployed = true;
+                break;
+              }
+            } catch {
+              /* The previous deployment remains available while Vercel builds. */
+            }
+            await NodeTimersPromises.setTimeout(5_000);
+          }
+          if (!deployed)
+            throw new Error(
+              "The web deployment did not become ready within 15 minutes. The running server was not restarted. Check the Vercel build log, then retry.",
+            );
+        }
+        await state(
+          "updating",
+          "Validation passed. Restarting the fork server; this page will reconnect automatically.",
+        );
       },
       restart: async () => {
         await run("systemctl", ["--user", "restart", FORK_UPDATE_SERVICE], {
@@ -709,7 +811,10 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
       },
       ready: (directory) => waitForFork(config, directory, active.environmentId, run),
     });
-    await state("updated", "The fork is running the new nightly. Refresh to use it.");
+    await state(
+      "updated",
+      "The fork is running the new nightly. The client reconnects automatically; loading the new UI is optional.",
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`\nFAILED: ${message}\n`);

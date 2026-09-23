@@ -1,3 +1,4 @@
+import { useForkUpdateBanners } from "./chat/useForkUpdateBanners";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
@@ -2641,6 +2642,7 @@ export default function ChatView(props: ChatViewProps) {
         : [],
     [automaticEnvironment, logicalProjectEnvironments, environmentById],
   );
+  const forkUpdateBanners = useForkUpdateBanners();
   const autoBalanceUpdateBanner = useAutoBalanceUpdateBanner(autoUpdateEnvironments);
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
@@ -2834,10 +2836,12 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
     if (autoBalanceUpdateBanner) items.push(autoBalanceUpdateBanner);
+    items.push(...forkUpdateBanners);
     return items;
   }, [
     automaticEnvironment,
     autoBalanceUpdateBanner,
+    forkUpdateBanners,
     activeEnvironmentUnavailableState,
     reconnectWarningGraceElapsed,
     handleReconnectActiveEnvironment,

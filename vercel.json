@@ -1,0 +1,32 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "node scripts/build-fork-web.ts",
+  "installCommand": "corepack pnpm install --frozen-lockfile --ignore-scripts",
+  "outputDirectory": "apps/web/dist",
+  "git": {
+    "deploymentEnabled": {
+      "*": false,
+      "omp-production": true
+    }
+  },
+  "github": {
+    "silent": true
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/fork-build.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    }
+  ]
+}

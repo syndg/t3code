@@ -28,7 +28,6 @@ import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { SidebarForkUpdateNotice } from "./sidebar/SidebarForkUpdateNotice";
 import {
   resolveSidebarStageFocusRingOffsetClass,
   useSidebarStageBackdropVariant,
@@ -266,7 +265,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           ) : (
             <ThreadSidebar />
           )}
-          <SidebarForkUpdateNotice />
           <SidebarRail onDoubleClick={resetSidebarWidth} />
         </Sidebar>
         {children}

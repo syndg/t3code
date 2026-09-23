@@ -13,6 +13,13 @@ export const ForkUpdaterConfig = Schema.Struct({
   baseDir: AbsolutePath,
   nodeBinary: AbsolutePath,
   codexBinary: AbsolutePath,
+  webDeployment: Schema.optional(
+    Schema.Struct({
+      gitRemote: Schema.String,
+      gitBranch: Schema.String,
+      url: Schema.String,
+    }),
+  ),
 });
 export type ForkUpdaterConfig = typeof ForkUpdaterConfig.Type;
 

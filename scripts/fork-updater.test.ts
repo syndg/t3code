@@ -17,6 +17,7 @@ import {
   assertPublishedForkNightly,
   assertStagedForkDiff,
   forkCodexEnvironment,
+  validateForkWithRepairs,
 } from "./fork-updater.ts";
 
 const temporary: string[] = [];
@@ -297,4 +298,63 @@ it("publishes state atomically for concurrent readers", async () => {
     ),
   ).toBe(true);
   expect((await NodeFSP.readdir(fixture.root)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+});
+
+describe("validation repair before promotion", () => {
+  it("returns failed validation to the agent and promotes only a passing repair", async () => {
+    const fixture = await deploymentFixture();
+    const failure = new Error("OMP adapter type error");
+    const diagnoses: unknown[] = [];
+    let checks = 0;
+    let restarts = 0;
+    await activateForkBuild({
+      ...fixture,
+      validate: () =>
+        validateForkWithRepairs({
+          prepare: async (diagnosis) => {
+            diagnoses.push(diagnosis);
+            expect(await NodeFSP.realpath(fixture.current)).toBe(fixture.previous);
+          },
+          validate: async () => {
+            if (++checks === 1) throw failure;
+          },
+        }),
+      beforeSwitch: async () => {},
+      restart: async () => {
+        restarts++;
+      },
+      ready: async () => {},
+    });
+    expect(diagnoses).toEqual([undefined, failure]);
+    expect(checks).toBe(2);
+    expect(restarts).toBe(1);
+    expect(await NodeFSP.realpath(fixture.current)).toBe(fixture.candidate);
+  });
+
+  it("leaves the working server untouched when two repairs still fail", async () => {
+    const fixture = await deploymentFixture();
+    let checks = 0;
+    let restarts = 0;
+    await expect(
+      activateForkBuild({
+        ...fixture,
+        validate: () =>
+          validateForkWithRepairs({
+            prepare: async () => {},
+            validate: async () => {
+              checks++;
+              throw new Error("OMP regression");
+            },
+          }),
+        beforeSwitch: async () => {},
+        restart: async () => {
+          restarts++;
+        },
+        ready: async () => {},
+      }),
+    ).rejects.toThrow("after two repair attempts: OMP regression");
+    expect(checks).toBe(3);
+    expect(restarts).toBe(0);
+    expect(await NodeFSP.realpath(fixture.current)).toBe(fixture.previous);
+  });
 });

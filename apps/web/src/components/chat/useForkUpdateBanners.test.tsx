@@ -29,10 +29,20 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: fixture.toast } }));
 vi.mock("../ui/button", () => ({
+  InlineButton: (props: ComponentProps<"button">) => createElement("button", props),
   Button: (props: ComponentProps<"button">) => createElement("button", props),
 }));
 
-import { SidebarForkUpdateNotice } from "./SidebarForkUpdateNotice";
+import { useForkUpdateBanners } from "./useForkUpdateBanners";
+function ForkUpdateBanners() {
+  return (
+    <>
+      {useForkUpdateBanners().map((item) => (
+        <div key={item.id}>{item.actions}</div>
+      ))}
+    </>
+  );
+}
 
 let renderer: ReactTestRenderer | undefined;
 afterEach(async () => {
@@ -48,7 +58,7 @@ describe("fork update consent and completion", () => {
     });
     fixture.start.mockReturnValue(accepted);
     await act(async () => {
-      renderer = create(<SidebarForkUpdateNotice />);
+      renderer = create(<ForkUpdateBanners />);
     });
     expect(fixture.start).not.toHaveBeenCalled();
     const update = renderer!.root
@@ -71,12 +81,19 @@ describe("fork update consent and completion", () => {
 
     fixture.state = { ...fixture.state, status: "failed", message: "Validation failed" };
     await act(async () => {
-      renderer!.update(<SidebarForkUpdateNotice />);
+      renderer!.update(<ForkUpdateBanners />);
     });
     expect(fixture.toast.mock.calls.some(([notice]) => notice.type === "success")).toBe(false);
     expect(
-      renderer!.root.findAllByType("button").some((button) => button.children.includes("Refresh")),
+      renderer!.root
+        .findAllByType("button")
+        .some((button) => button.children.includes("Reload UI")),
     ).toBe(false);
+
+    fixture.state = { ...fixture.state, status: "updating" };
+    await act(async () => {
+      renderer!.update(<ForkUpdateBanners />);
+    });
 
     fixture.state = {
       ...fixture.state,
@@ -84,13 +101,15 @@ describe("fork update consent and completion", () => {
       currentVersion: fixture.state.targetVersion!,
     };
     await act(async () => {
-      renderer!.update(<SidebarForkUpdateNotice />);
+      renderer!.update(<ForkUpdateBanners />);
     });
     expect(fixture.toast.mock.calls.filter(([notice]) => notice.type === "success")).toHaveLength(
       1,
     );
     expect(
-      renderer!.root.findAllByType("button").some((button) => button.children.includes("Refresh")),
+      renderer!.root
+        .findAllByType("button")
+        .some((button) => button.children.includes("Reload UI")),
     ).toBe(true);
   });
 });
