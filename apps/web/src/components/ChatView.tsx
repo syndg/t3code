@@ -2644,7 +2644,9 @@ export default function ChatView(props: ChatViewProps) {
   );
   const forkUpdateBanners = useForkUpdateBanners();
   const autoBalanceUpdateBanner = useAutoBalanceUpdateBanner(autoUpdateEnvironments);
-  const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
+  // Fork notices follow the published nightly, independently of this client's version.
+  const forkUpdateState = serverConfig?.forkUpdate;
+  const versionMismatch = forkUpdateState ? null : resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
       ? buildVersionMismatchDismissalKey(activeThread.environmentId, versionMismatch)
@@ -2677,7 +2679,8 @@ export default function ChatView(props: ChatViewProps) {
     isServerUpdateFailureDismissed(serverUpdateState);
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
-    const updateRunning = serverUpdateState.status === "running";
+    const updateRunning =
+      serverUpdateState.status === "running" || forkUpdateState?.status === "updating";
     const unavailableConnection = activeEnvironmentUnavailableState?.connection ?? null;
     const disconnectAction =
       canDisconnectActiveEnvironment && activeEnvironmentUnavailableState ? (
@@ -2842,6 +2845,7 @@ export default function ChatView(props: ChatViewProps) {
     automaticEnvironment,
     autoBalanceUpdateBanner,
     forkUpdateBanners,
+    forkUpdateState,
     activeEnvironmentUnavailableState,
     reconnectWarningGraceElapsed,
     handleReconnectActiveEnvironment,

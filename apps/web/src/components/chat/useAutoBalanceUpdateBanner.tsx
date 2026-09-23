@@ -45,6 +45,8 @@ export function useAutoBalanceUpdateBanner(
     () => new Set(),
   );
   const machines = states.flatMap(({ environment, state }) => {
+    // The fork banner owns its update progress, errors, and retry action.
+    if (environment.serverConfig?.forkUpdate) return [];
     const mismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
     const dismissKey = mismatch
       ? buildVersionMismatchDismissalKey(environment.environmentId, mismatch)
