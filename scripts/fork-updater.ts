@@ -529,6 +529,8 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
       config.codexBinary,
       [
         "exec",
+        "--model",
+        "gpt-6-sol",
         "--sandbox",
         "workspace-write",
         "--color",
