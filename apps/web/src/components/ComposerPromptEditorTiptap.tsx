@@ -291,7 +291,7 @@ function ComposerSkillNodeView({ node }: NodeViewProps) {
               skillDescription ??
               "No description is available for this skill."}
           </p>
-          {skill?.path ? (
+          {skill?.path && !skill.path.startsWith("skill://") ? (
             <Button variant="outline" size="sm" onClick={() => actions.openMention(skill.path)}>
               View instructions
             </Button>

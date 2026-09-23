@@ -2,6 +2,7 @@ import { OMP_DEFAULT_MODEL, OmpSettings, ProviderDriverKind } from "@t3tools/con
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -25,11 +26,21 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { makeOmpCommandCatalog } from "./OmpCommandCatalog.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 
 const DRIVER = ProviderDriverKind.make("omp");
 const decodeSettings = Schema.decodeSync(OmpSettings);
 const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
+
+function thinkingLabel(name: string): string {
+  if (name !== name.toLowerCase()) return name;
+  if (name === "xhigh") return "X-High";
+  return name.replace(
+    /(^|-)([a-z])/g,
+    (_, separator: string, letter: string) => `${separator}${letter.toUpperCase()}`,
+  );
+}
 
 export type OmpDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
@@ -57,7 +68,7 @@ export function ompModelsFromConfigOptions(options: ReadonlyArray<AcpSchema.Sess
               type: "select",
               options: thinkingOptions.map((entry) => ({
                 id: entry.value,
-                label: entry.name || entry.value,
+                label: thinkingLabel(entry.name || entry.value),
               })),
               ...(thinking?.type === "select" ? { currentValue: thinking.currentValue } : {}),
             },
@@ -206,7 +217,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         });
       });
 
-      const snapshot = yield* makeManagedServerProvider({
+      const managedSnapshot = yield* makeManagedServerProvider({
         resolveMaintenance: () =>
           Effect.succeed(
             makeManualOnlyProviderMaintenanceCapabilities({ provider: DRIVER, packageName: null }),
@@ -235,8 +246,51 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
             }),
         ),
       );
-      const adapter = yield* makeOmpAdapter({ instanceId, enabled, makeRuntime });
+      const { snapshot, onAvailableCommands, snapshotForCwd, skillNamesForCwd } =
+        yield* makeOmpCommandCatalog(managedSnapshot);
+      const adapter = yield* makeOmpAdapter({
+        instanceId,
+        enabled,
+        makeRuntime,
+        onAvailableCommands,
+        skillNamesForCwd,
+      });
       const textGeneration = yield* makeOmpTextGeneration((textCwd) => makeRuntime(textCwd));
+      const probeWorkspace = (cwd: string) =>
+        Effect.gen(function* () {
+          const known = yield* snapshot.getSnapshot;
+          if (known.workspaceSnapshots?.some((entry) => entry.cwd === cwd)) {
+            return yield* snapshotForCwd(cwd);
+          }
+          yield* Effect.gen(function* () {
+            const runtime = yield* makeRuntime(cwd);
+            const commandsReady = yield* Deferred.make<void>();
+            yield* Stream.runForEach(runtime.getEvents(), (event) =>
+              event._tag === "AvailableCommandsUpdated"
+                ? onAvailableCommands(event.availableCommands, cwd).pipe(
+                    Effect.andThen(Deferred.succeed(commandsReady, undefined)),
+                    Effect.asVoid,
+                  )
+                : event._tag === "EventStreamBarrier"
+                  ? Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
+            ).pipe(Effect.forkScoped);
+            yield* runtime.start();
+            yield* Deferred.await(commandsReady);
+            yield* runtime.drainEvents;
+          }).pipe(Effect.scoped, Effect.timeout("15 seconds"));
+          return yield* snapshotForCwd(cwd);
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER,
+                instanceId,
+                detail: `Could not discover OMP commands for '${cwd}': ${cause.message}`,
+                cause,
+              }),
+          ),
+        );
       return {
         instanceId,
         driverKind: DRIVER,
@@ -245,6 +299,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd: (cwd) => (enabled ? probeWorkspace(cwd) : snapshot.getSnapshot),
         adapter,
         textGeneration,
       } satisfies ProviderInstance;

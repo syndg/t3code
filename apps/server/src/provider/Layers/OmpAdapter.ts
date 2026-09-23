@@ -5,6 +5,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProviderDriverKind,
   RuntimeRequestId,
+  RuntimeTaskId,
   TurnId,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
@@ -52,6 +53,8 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import { rewriteOmpSkillMentions } from "../Drivers/OmpCommandCatalog.ts";
+import { boundedOmpChildText, ompChildSnapshots, ompChildYieldResult } from "./OmpSubagents.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 const ResumeCursor = Schema.Struct({
@@ -80,6 +83,18 @@ interface SessionContext {
   readonly stopLock: Semaphore.Semaphore;
   readonly approvals: Map<ApprovalRequestId, PendingApproval>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  readonly toolTurns: Map<string, TurnId | undefined>;
+  readonly childTasks: Map<
+    string,
+    {
+      turnId: TurnId | undefined;
+      toolUseId: string;
+      lastProgress: string | undefined;
+      terminal: boolean;
+      terminalSummary: string | undefined;
+      terminalTokens: number | undefined;
+    }
+  >;
   session: ProviderSession;
   activeTurnId: TurnId | undefined;
   promptFiber: Fiber.Fiber<AcpSchema.PromptResponse, AcpErrors.AcpError> | undefined;
@@ -96,6 +111,11 @@ export interface OmpAdapterOptions {
     approvalMode?: string,
     mcpServers?: ReadonlyArray<AcpSchema.McpServer>,
   ) => Effect.Effect<Runtime, AcpErrors.AcpError, Scope.Scope>;
+  readonly onAvailableCommands?: (
+    commands: ReadonlyArray<AcpSchema.AvailableCommand>,
+    cwd: string,
+  ) => Effect.Effect<void>;
+  readonly skillNamesForCwd?: (cwd: string) => Effect.Effect<ReadonlySet<string>>;
 }
 
 function approvalMode(runtimeMode: ProviderSession["runtimeMode"]): string | undefined {
@@ -184,6 +204,24 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
           });
         }
         if (context.promptFiber) yield* Effect.ignore(context.runtime.cancel);
+        for (const [id, task] of context.childTasks) {
+          if (task.terminal) continue;
+          yield* emit({
+            type: "task.updated",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: context.threadId,
+            turnId: task.turnId,
+            payload: {
+              taskId: RuntimeTaskId.make(id),
+              taskType: "subagent",
+              toolUseId: task.toolUseId,
+              status: "cancelled",
+              timelineBypass: true,
+            },
+          });
+          task.terminal = true;
+        }
         yield* Scope.close(context.scope, Exit.void).pipe(Effect.ignoreCause({ log: true }));
         context.closed = true;
         if (sessions.get(context.threadId) === context) sessions.delete(context.threadId);
@@ -241,6 +279,180 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
       }).pipe(Effect.ensuring(Effect.sync(() => context.approvals.delete(requestId))));
     });
 
+  const emitChildTasks = (
+    context: SessionContext,
+    toolCall: AcpSessionRuntime.AcpSessionRuntimeEvent & { _tag: "ToolCallUpdated" },
+  ) =>
+    Effect.gen(function* () {
+      const toolUseId = toolCall.toolCall.toolCallId;
+      for (const { child, parentAgentId, result } of ompChildSnapshots(
+        toolCall.toolCall.data.rawOutput,
+      )) {
+        const id = child.id.trim();
+        if (!id) continue;
+        let task = context.childTasks.get(id);
+        if (!task) {
+          task = {
+            turnId:
+              (parentAgentId ? context.childTasks.get(parentAgentId)?.turnId : undefined) ??
+              context.toolTurns.get(toolUseId),
+            toolUseId,
+            lastProgress: undefined,
+            terminal: false,
+            terminalSummary: undefined,
+            terminalTokens: undefined,
+          };
+          context.childTasks.set(id, task);
+        }
+        const description = child.description?.trim() || child.task?.trim() || id;
+        const yieldResult =
+          !child.aborted && (child.status === "completed" || (result && child.exitCode === 0))
+            ? ompChildYieldResult(child)
+            : undefined;
+        const failedResult =
+          !child.aborted &&
+          (child.status === "failed" ||
+            (result && child.exitCode !== undefined && child.exitCode !== 0));
+        const summary =
+          child.output?.trim() ||
+          (failedResult ? boundedOmpChildText(child.error ?? child.stderr ?? "") : yieldResult) ||
+          child.recentOutput?.at(-1)?.trim();
+        const progressSummary = summary || child.lastIntent?.trim();
+        const model = child.resolvedModelIdentity?.trim();
+        const effort = child.resolvedThinkingLevel?.trim();
+        const typedUsage =
+          Number.isSafeInteger(child.tokens) && child.tokens! >= 0
+            ? {
+                totalTokens: child.tokens!,
+                ...(Number.isSafeInteger(child.toolCount) && child.toolCount! >= 0
+                  ? { toolUses: child.toolCount! }
+                  : {}),
+                ...(Number.isSafeInteger(child.durationMs) && child.durationMs! >= 0
+                  ? { durationMs: child.durationMs! }
+                  : {}),
+              }
+            : undefined;
+        const linkage = {
+          taskId: RuntimeTaskId.make(id),
+          taskType: "subagent",
+          title: id,
+          ...(child.agent?.trim() ? { role: child.agent.trim() } : {}),
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          toolUseId: task.toolUseId,
+          ...(parentAgentId ? { parentAgentId } : {}),
+          ...(Number.isSafeInteger(child.index) && child.index! >= 0
+            ? { agentIndex: child.index! }
+            : {}),
+          timelineBypass: true,
+        };
+        if (task.lastProgress === undefined && !task.terminal) {
+          yield* emit({
+            type: "task.started",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: context.threadId,
+            turnId: task.turnId,
+            payload: { ...linkage, description },
+          });
+        }
+        if (task.terminal) {
+          if (
+            result &&
+            ((summary && summary !== task.terminalSummary) ||
+              (typedUsage && typedUsage.totalTokens > (task.terminalTokens ?? -1)))
+          ) {
+            yield* emit({
+              type: "task.completed",
+              ...(yield* stamp),
+              provider: PROVIDER,
+              threadId: context.threadId,
+              turnId: task.turnId,
+              payload: {
+                ...linkage,
+                status: child.aborted ? "stopped" : child.exitCode === 0 ? "completed" : "failed",
+                ...(summary ? { summary } : {}),
+                ...(typedUsage ? { typedUsage } : {}),
+              },
+            });
+            task.terminalSummary = summary ?? task.terminalSummary;
+            task.terminalTokens = typedUsage?.totalTokens ?? task.terminalTokens;
+          }
+          continue;
+        }
+        const status = child.aborted
+          ? "cancelled"
+          : result
+            ? child.exitCode === 0
+              ? "completed"
+              : "failed"
+            : child.status === "aborted"
+              ? "cancelled"
+              : child.status;
+        const progressStatus = status === "pending" || status === "running" ? status : undefined;
+        const signature = JSON.stringify([
+          progressStatus,
+          description,
+          progressSummary,
+          typedUsage,
+          child.currentTool,
+          model,
+          effort,
+        ]);
+        if (
+          status !== "completed" &&
+          status !== "failed" &&
+          status !== "cancelled" &&
+          signature !== task.lastProgress
+        ) {
+          yield* emit({
+            type: "task.progress",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: context.threadId,
+            turnId: task.turnId,
+            payload: {
+              ...linkage,
+              description,
+              ...(progressStatus ? { status: progressStatus } : {}),
+              ...(progressSummary ? { summary: progressSummary } : {}),
+              ...(typedUsage ? { typedUsage } : {}),
+              ...(child.currentTool?.trim() ? { lastToolName: child.currentTool.trim() } : {}),
+            },
+          });
+          task.lastProgress = signature;
+        }
+        if (status === "completed" || status === "failed" || status === "cancelled") {
+          if (status === "cancelled") {
+            yield* emit({
+              type: "task.updated",
+              ...(yield* stamp),
+              provider: PROVIDER,
+              threadId: context.threadId,
+              turnId: task.turnId,
+              payload: { ...linkage, status: "cancelled" },
+            });
+          }
+          yield* emit({
+            type: "task.completed",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: context.threadId,
+            turnId: task.turnId,
+            payload: {
+              ...linkage,
+              status: status === "cancelled" ? "stopped" : status,
+              ...(summary ? { summary } : {}),
+              ...(typedUsage ? { typedUsage } : {}),
+            },
+          });
+          task.terminal = true;
+          task.terminalSummary = summary;
+          task.terminalTokens = typedUsage?.totalTokens;
+        }
+      }
+    });
+
   const handleEvent = (context: SessionContext, event: AcpSessionRuntime.AcpSessionRuntimeEvent) =>
     Effect.gen(function* () {
       if (event._tag === "EventStreamBarrier") {
@@ -249,6 +461,10 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
       }
       if (context.stopped) return;
       switch (event._tag) {
+        case "AvailableCommandsUpdated":
+          if (options.onAvailableCommands)
+            yield* options.onAvailableCommands(event.availableCommands, context.cwd);
+          return;
         case "ConnectionTerminated":
           yield* stopContext(context).pipe(Effect.forkIn(ownerScope));
           return;
@@ -295,6 +511,9 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
           );
           return;
         case "ToolCallUpdated":
+          if (!context.toolTurns.has(event.toolCall.toolCallId))
+            context.toolTurns.set(event.toolCall.toolCallId, context.activeTurnId);
+          yield* emitChildTasks(context, event);
           yield* emit(
             makeAcpToolCallEvent({
               stamp: yield* stamp,
@@ -416,6 +635,8 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
             stopLock: yield* Semaphore.make(1),
             approvals: new Map(),
             turns: [],
+            toolTurns: new Map(),
+            childTasks: new Map(),
             session,
             activeTurnId: undefined,
             promptFiber: undefined,
@@ -476,7 +697,15 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
         });
       const prompt: AcpSchema.ContentBlock[] = [];
       const text = input.input?.trim() ?? "";
-      if (text) prompt.push({ type: "text", text });
+      const skillNames = options.skillNamesForCwd
+        ? yield* options.skillNamesForCwd(context.cwd)
+        : new Set<string>();
+      const dispatchedText = rewriteOmpSkillMentions(text, skillNames);
+      const nativeCommand =
+        dispatchedText !== text ||
+        /^\/[a-z][\w:-]*(?:\s|$)/i.test(dispatchedText) ||
+        /(^|\s)\/skill:[a-z0-9][a-z0-9:_-]*(?=\s|$)/i.test(dispatchedText);
+      if (dispatchedText) prompt.push({ type: "text", text: dispatchedText });
       for (const attachment of input.attachments ?? []) {
         if (attachment.type !== "image") continue;
         const attachmentPath = resolveAttachmentPath({
@@ -614,10 +843,15 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
             });
             const fiber = yield* context.runtime
               .prompt({
-                prompt: [
-                  ...prompt,
-                  { type: "text", text: buildRuntimeInstructions({ harness: "Oh My Pi", model }) },
-                ],
+                prompt: nativeCommand
+                  ? prompt
+                  : [
+                      ...prompt,
+                      {
+                        type: "text",
+                        text: buildRuntimeInstructions({ harness: "Oh My Pi", model }),
+                      },
+                    ],
               })
               .pipe(Effect.forkIn(context.scope));
             context.promptFiber = fiber;

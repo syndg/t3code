@@ -221,7 +221,7 @@ export function ComposerEditor({
               : undefined)
           }
           {...(selectedSkill?.description ? { skillDescription: selectedSkill.description } : {})}
-          {...(selectedSkill?.path && onOpenMention
+          {...(selectedSkill?.path && !selectedSkill.path.startsWith("skill://") && onOpenMention
             ? {
                 onOpenSkill: () => {
                   setSelected(null);

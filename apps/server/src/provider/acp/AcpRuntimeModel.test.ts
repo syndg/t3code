@@ -759,6 +759,44 @@ describe("AcpRuntimeModel", () => {
       ).toEqual({ emit: false, skippedSinceEmit: 0 });
     });
 
+    it("emits child lifecycle changes even while a parent tool remains in progress", () => {
+      const childCall = (status: string, tokens: number): AcpToolCallState => ({
+        toolCallId: "spawn-1",
+        title: "Spawning child",
+        status: "inProgress",
+        data: {
+          rawOutput: { details: { progress: [{ id: "child-1", status, tokens }], results: [] } },
+        },
+      });
+      const pending = childCall("pending", 0);
+      const running = childCall("running", 0);
+      const completed = childCall("completed", 42);
+      expect(
+        decideToolCallUpdateEmission({
+          previous: pending,
+          next: running,
+          lastEmittedDetailLength: 0,
+          skippedSinceEmit: 0,
+        }).emit,
+      ).toBe(true);
+      expect(
+        decideToolCallUpdateEmission({
+          previous: running,
+          next: childCall("running", 10),
+          lastEmittedDetailLength: 0,
+          skippedSinceEmit: 0,
+        }).emit,
+      ).toBe(false);
+      expect(
+        decideToolCallUpdateEmission({
+          previous: running,
+          next: completed,
+          lastEmittedDetailLength: 0,
+          skippedSinceEmit: 0,
+        }).emit,
+      ).toBe(true);
+    });
+
     it("coalesces command-tool updates whose content grew while detail stayed the command", () => {
       const commandCall = (stdout: string): AcpToolCallState => ({
         toolCallId: "tool-1",

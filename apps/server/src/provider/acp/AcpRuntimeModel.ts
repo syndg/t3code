@@ -612,6 +612,31 @@ function toolCallOutputUnchanged(previous: AcpToolCallState, next: AcpToolCallSt
   );
 }
 
+function taskLifecycleSnapshot(rawOutput: unknown): string | undefined {
+  if (!isRecord(rawOutput) || !isRecord(rawOutput.details)) return undefined;
+  const states: string[] = [];
+  const visited = new WeakSet<object>();
+  const scan = (details: unknown): void => {
+    if (!isRecord(details) || visited.has(details)) return;
+    visited.add(details);
+    for (const field of ["progress", "results"] as const) {
+      const entries = details[field];
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (!isRecord(entry) || typeof entry.id !== "string") continue;
+        states.push(
+          `${entry.id}:${field}:${String(entry.status ?? entry.exitCode ?? entry.aborted ?? "")}`,
+        );
+        scan(entry.inflightTaskDetails);
+        const task = isRecord(entry.extractedToolData) ? entry.extractedToolData.task : undefined;
+        if (Array.isArray(task)) for (const nested of task) scan(nested);
+      }
+    }
+  };
+  scan(rawOutput.details);
+  return states.join("|");
+}
+
 // Command tools keep `detail` equal to the command, so live stdout lives on
 // `data.content` / `data.rawOutput`. Measure that too, otherwise coalescing never
 // sees growth and in-progress output is held until completed/failed.
@@ -650,6 +675,11 @@ export function decideToolCallUpdateEmission(
     return { emit: true, skippedSinceEmit: 0 };
   }
   if (previous === undefined || previous.title !== next.title || previous.status !== next.status) {
+    return { emit: true, skippedSinceEmit: 0 };
+  }
+  const previousTasks = taskLifecycleSnapshot(previous.data.rawOutput);
+  const nextTasks = taskLifecycleSnapshot(next.data.rawOutput);
+  if (nextTasks !== undefined && previousTasks !== nextTasks) {
     return { emit: true, skippedSinceEmit: 0 };
   }
   if (previous.detail === next.detail && toolCallOutputUnchanged(previous, next)) {

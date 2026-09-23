@@ -4,13 +4,16 @@ import * as NodeFS from "node:fs";
 
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Schema from "effect/Schema";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 
 import * as EffectAcpAgent from "effect-acp/agent";
 import * as AcpError from "effect-acp/errors";
-import type * as AcpSchema from "effect-acp/schema";
+import * as AcpSchema from "effect-acp/schema";
+
+const decodeSessionUpdates = Schema.decodeUnknownSync(Schema.Array(AcpSchema.SessionUpdate));
 
 const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
@@ -433,8 +436,22 @@ const program = Effect.gen(function* () {
     yield* agent.handleLogout(() => Effect.succeed({}));
   }
 
+  const replayUpdates = (variable: string) =>
+    Effect.forEach(
+      decodeSessionUpdates(JSON.parse(process.env[variable] ?? "[]")),
+      (update) => agent.client.sessionUpdate({ sessionId, update }),
+      { discard: true },
+    );
+
   yield* agent.handleCreateSession(() =>
     Effect.gen(function* () {
+      yield* replayUpdates("T3_ACP_STARTUP_UPDATES");
+      if (process.env.T3_ACP_DELAYED_STARTUP_UPDATES) {
+        yield* Effect.sleep("50 millis").pipe(
+          Effect.andThen(replayUpdates("T3_ACP_DELAYED_STARTUP_UPDATES")),
+          Effect.forkDetach,
+        );
+      }
       if (antigravityProfile) {
         yield* publishAntigravityCommands(sessionId);
       }
@@ -619,6 +636,11 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+      yield* replayUpdates(
+        promptCount > 1 && process.env.T3_ACP_SECOND_PROMPT_UPDATES
+          ? "T3_ACP_SECOND_PROMPT_UPDATES"
+          : "T3_ACP_PROMPT_UPDATES",
+      );
 
       if (completeFirstPromptOnCancel && promptCount === 1) {
         yield* agent.client.sessionUpdate({
@@ -1329,7 +1351,13 @@ const program = Effect.gen(function* () {
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: promptResponseText ?? "hello from mock" },
+          content: {
+            type: "text",
+            text:
+              process.env.T3_ACP_ECHO_PROMPT === "1"
+                ? JSON.stringify(request.prompt)
+                : (promptResponseText ?? "hello from mock"),
+          },
         },
       });
 
