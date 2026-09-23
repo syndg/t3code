@@ -13,6 +13,14 @@ import { toastManager } from "../ui/toast";
 
 const announcedNightlies = new Set<string>();
 
+function reportStartFailure(error: unknown) {
+  toastManager.add({
+    type: "error",
+    title: "Could not start fork update",
+    description: error instanceof Error ? error.message : String(error),
+  });
+}
+
 export function ForkUpdateButton({
   environmentId,
   connected,
@@ -30,26 +38,22 @@ export function ForkUpdateButton({
     !pending &&
     (state.status === "available" || state.status === "failed") &&
     !!state.targetVersion;
-  const start = async () => {
+  const start = () => {
     if (!canStart || submitting.current || !state.targetVersion) return;
     submitting.current = true;
     setPending(true);
-    try {
-      const result = await startUpdate({
-        environmentId,
-        input: { targetVersion: state.targetVersion },
+    void startUpdate({
+      environmentId,
+      input: { targetVersion: state.targetVersion },
+    })
+      .then((result) => {
+        if (result._tag === "Failure") reportStartFailure(squashAtomCommandFailure(result));
+      })
+      .catch(reportStartFailure)
+      .finally(() => {
+        submitting.current = false;
+        setPending(false);
       });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not start fork update",
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      submitting.current = false;
-      setPending(false);
-    }
   };
   return (
     <Button size="xs" variant="outline" disabled={!canStart} onClick={() => void start()}>
