@@ -194,7 +194,7 @@ it("rejects service configurations that could restart the original server or byp
     codexBinary: "/usr/bin/codex",
   };
   const entry = `${forkUpdaterPaths(config.baseDir).current}/apps/server/dist/bin.mjs`;
-  const properties = `ExecStart={ path=${config.nodeBinary} ; argv[]=${config.nodeBinary} ${entry} serve --mode web --host 127.0.0.1 --port 3774 --base-dir ${config.baseDir} --no-browser ; ignore_errors=no ; }\nActiveState=active\nEnvironmentFiles=\nEnvironment=PATH=/usr/bin\n`;
+  const properties = `ExecStart={ path=${config.nodeBinary} ; argv[]=${config.nodeBinary} ${entry} serve --mode web --host 127.0.0.1 --port 3774 --base-dir ${config.baseDir} --no-browser ; ignore_errors=no ; }\nActiveState=active\nEnvironment=PATH=/usr/bin\n`;
   assertForkService(config, properties);
   expect(() => assertForkService(config, properties.replace("--port 3774", "--port 3773"))).toThrow(
     "isolated",
@@ -209,10 +209,7 @@ it("rejects service configurations that could restart the original server or byp
     assertForkService(config, properties.replace(entry, "/work/fork/apps/server/dist/bin.mjs")),
   ).toThrow("isolated");
   expect(() =>
-    assertForkService(
-      config,
-      properties.replace("EnvironmentFiles=", "EnvironmentFiles=/tmp/overrides.env"),
-    ),
+    assertForkService(config, `${properties}EnvironmentFiles=/tmp/overrides.env\n`),
   ).toThrow("environment files");
   expect(() =>
     assertForkService(

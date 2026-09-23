@@ -158,10 +158,7 @@ export function assertForkService(config: ForkUpdaterConfig, properties: string)
       `${FORK_UPDATE_SERVICE} must run the fork-updater/current server with the isolated base directory and port ${FORK_UPDATE_PORT}.`,
     );
   }
-  if (
-    !properties.includes("\nActiveState=active") ||
-    !properties.includes("\nEnvironmentFiles=\n")
-  ) {
+  if (!/^ActiveState=active$/m.test(properties) || /^EnvironmentFiles=.+$/m.test(properties)) {
     throw new Error(
       "The fork service must be active and must not load unverified environment files.",
     );
@@ -581,7 +578,6 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
           cwd: candidate,
           env: buildEnv,
         });
-        await run(vp, ["install", "--lockfile-only"], { cwd: candidate, env: buildEnv });
         await git(["add", "--all"]);
         await git(["commit", "--allow-empty", "-m", `Stamp OMP fork nightly ${version}`]);
         const validatedHead = (await git(["rev-parse", "HEAD"])).stdout;
