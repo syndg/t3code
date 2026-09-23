@@ -14,6 +14,10 @@ const env = {
     ? `/__build/${process.env.VERCEL_URL.replace(/\.vercel\.app$/, "")}/`
     : "/",
   VITE_HOSTED_APP_CHANNEL: "nightly",
+  // T3's production Clerk instance rejects custom domains. Direct pairing
+  // authenticates to the existing relay without a separate account service.
+  T3CODE_CLERK_PUBLISHABLE_KEY: "",
+  VITE_CLERK_PUBLISHABLE_KEY: "",
   VITE_HOSTED_APP_URL: "https://t3.syndg.dev",
 };
 NodeChildProcess.execFileSync(
