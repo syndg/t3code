@@ -8,12 +8,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ForkUpdater from "./forkUpdater.ts";
 import * as ServiceLauncherClient from "./serviceLauncherClient.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 import * as ServerSelfUpdate from "./selfUpdate.ts";
@@ -24,6 +26,7 @@ interface HarnessOptions {
   readonly preflight?: "ready" | "blocked";
   readonly requestUpdate?: ServiceLauncherClient.ServiceLauncherClient["Service"]["requestUpdate"];
   readonly desktopAppUpdate?: DesktopAppUpdate.DesktopAppUpdate["Service"];
+  readonly forkUpdater?: ForkUpdater.ForkUpdater["Service"];
 }
 
 // The staged runtime is a release archive: the fake client serves SHA256SUMS
@@ -124,11 +127,41 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
     Effect.provideService(HostProcessPlatform, "linux"),
     Effect.provideService(HostProcessArchitecture, "x64"),
     Effect.provide(ServerConfig.layer({ ...config, mode: options.mode ?? "web" })),
+    (effect) =>
+      options.forkUpdater === undefined
+        ? effect
+        : Effect.provideService(effect, ForkUpdater.ForkUpdater, options.forkUpdater),
   );
   return { selfUpdate, order };
 });
 
 it.layer(NodeServices.layer)("server self update", (it) => {
+  it.effect("routes generic update requests to the fork without downloading stock artifacts", () =>
+    Effect.gen(function* () {
+      const requested: string[] = [];
+      const { selfUpdate, order } = yield* makeHarness({
+        forkUpdater: {
+          enabled: true,
+          current: Effect.succeed(undefined),
+          streamChanges: Stream.empty,
+          start: (targetVersion) =>
+            Effect.sync(() => {
+              requested.push(targetVersion);
+              return { targetVersion, method: "respawn" as const };
+            }),
+        },
+      });
+      expect(yield* selfUpdate.update({ targetVersion: "1.2.0-nightly.20260923.1" })).toEqual({
+        targetVersion: "1.2.0-nightly.20260923.1",
+        method: "respawn",
+      });
+      expect(requested).toEqual(["1.2.0-nightly.20260923.1"]);
+      expect(order).toEqual([]);
+      expect((yield* selfUpdate.commitDesktopUpdate("token").pipe(Effect.flip)).reason).toContain(
+        "updated from source",
+      );
+    }),
+  );
   it.effect("marks running threads at the boot-service handoff", () =>
     Effect.gen(function* () {
       const events: string[] = [];

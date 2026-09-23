@@ -47,6 +47,22 @@ If you run the server with `npx` rather than an installed `t3`, there is
 nothing to update on the host: stop the server and relaunch it as
 `npx t3@<client-version>` with the same subcommand and options.
 
+## Update the OMP fork
+
+When the fork updater is configured, it checks published T3 nightlies at startup
+and every 12 hours. A notice does not start an update.
+
+Choose **Update** in the fork's notice to start Codex using the host's existing
+ChatGPT subscription login. Codex merges the nightly while preserving the fork's
+changes. The updater validates and builds it separately, then restarts only the
+fork service. You can close the client while it works.
+
+When the update finishes, reconnect and choose **Refresh**. If validation fails,
+the current build keeps running; a failed activation attempts to restore the
+previous build. The notice shows the failure and offers **Retry**.
+
+Use this notice, not `t3 update` or a stock release download, to retain OMP support.
+
 ## If an update fails
 
 Keep the client open until it reconnects or reports a failure. A failed service

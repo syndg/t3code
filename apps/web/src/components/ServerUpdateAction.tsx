@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import {
@@ -16,6 +17,8 @@ import { manualServerUpdateCommand } from "~/versionSkew";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useEnvironment } from "~/state/environments";
+import { ForkUpdateButton } from "./sidebar/SidebarForkUpdateNotice";
 
 // The wire "installing" stage is a sub-second launcher handoff, so the UI
 // folds it into the download phase; everything after the handoff is the
@@ -198,6 +201,8 @@ export function ServerUpdateAction({
   appearance = "button",
 }: Omit<ServerUpdateTarget, "continueThreadsAfterServerUpdate"> & UpdateButtonProps) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
+  const environment = useEnvironment(environmentId);
+  const forkUpdate = useAtomValue(serverEnvironment.configValueAtom(environmentId))?.forkUpdate;
   const continueThreadsAfterServerUpdate = useEnvironmentSettings(
     environmentId,
     (settings) => settings.continueThreadsAfterServerUpdate,
@@ -247,6 +252,16 @@ export function ServerUpdateAction({
       continueThreadsAfterServerUpdate,
     });
   };
+
+  if (forkUpdate) {
+    return (
+      <ForkUpdateButton
+        environmentId={environmentId}
+        connected={environment?.connection.phase === "connected"}
+        state={forkUpdate}
+      />
+    );
+  }
 
   if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
     return (

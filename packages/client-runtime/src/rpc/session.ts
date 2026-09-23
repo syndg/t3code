@@ -60,6 +60,7 @@ export interface RpcSessionOptions {
   readonly usageLimitSources?: boolean;
   /** This client answers /usage-limits itself, so the server may advertise it. */
   readonly usageLimitsCommand?: boolean;
+  readonly forkUpdate?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -157,6 +158,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+    ...(options.forkUpdate === true ? { forkUpdate: true } : {}),
   };
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {

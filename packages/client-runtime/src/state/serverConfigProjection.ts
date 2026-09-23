@@ -77,6 +77,12 @@ export function applyServerConfigProjection(
         latestEvent: event,
         source: "live",
       }));
+    case "forkUpdateUpdated":
+      return Option.map(current, (projection) => ({
+        config: { ...projection.config, forkUpdate: event.payload.state },
+        latestEvent: event,
+        source: "live",
+      }));
     case "environmentThemesUpdated":
       return Option.map(current, (projection) => ({
         config: {

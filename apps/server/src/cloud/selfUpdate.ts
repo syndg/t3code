@@ -24,6 +24,7 @@ import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
 
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
+import * as ForkUpdater from "./forkUpdater.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import {
   ensurePinnedRuntimeInstalled,
@@ -170,6 +171,20 @@ export const withRunningThreadContinuation = Effect.fn(
 });
 
 export const make = Effect.fn("cloud.server_self_update.make")(function* () {
+  const forkUpdater = yield* Effect.serviceOption(ForkUpdater.ForkUpdater);
+  if (Option.isSome(forkUpdater) && forkUpdater.value.enabled) {
+    const updater = forkUpdater.value;
+    return ServerSelfUpdate.of({
+      update: (input) => updater.start(input.targetVersion),
+      commitDesktopUpdate: () =>
+        Effect.fail(
+          new ServerSelfUpdateError({ reason: "This fork must be updated from source." }),
+        ),
+    });
+  }
+  if (Option.isSome(yield* ForkUpdater.configPath)) {
+    return yield* Effect.die("Configured fork updater is missing; stock updates are disabled.");
+  }
   const serverConfig = yield* ServerConfig.ServerConfig;
   const desktopAppUpdate = yield* DesktopAppUpdate.DesktopAppUpdate;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;

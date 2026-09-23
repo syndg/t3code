@@ -549,6 +549,15 @@ export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boole
   );
 }
 
+export const ForkUpdateState = Schema.Struct({
+  status: Schema.Literals(["idle", "available", "updating", "failed", "updated"]),
+  currentVersion: TrimmedNonEmptyString,
+  targetVersion: Schema.optionalKey(TrimmedNonEmptyString),
+  checkedAt: Schema.optionalKey(IsoDateTime),
+  message: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ForkUpdateState = typeof ForkUpdateState.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -599,6 +608,8 @@ export const ServerConfig = Schema.Struct({
    * stays absent for subscribers that did not opt in.
    */
   usageLimitSources: Schema.optional(UsageLimitSourceSnapshots),
+  /** Source-built fork updates; never use stock self-update artifacts for this environment. */
+  forkUpdate: Schema.optionalKey(ForkUpdateState),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -730,6 +741,14 @@ export const ServerConfigStreamUsageLimitSourcesUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamUsageLimitSourcesUpdatedEvent =
   typeof ServerConfigStreamUsageLimitSourcesUpdatedEvent.Type;
 
+export const ServerConfigStreamForkUpdateUpdatedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("forkUpdateUpdated"),
+  payload: Schema.Struct({ state: ForkUpdateState }),
+});
+export type ServerConfigStreamForkUpdateUpdatedEvent =
+  typeof ServerConfigStreamForkUpdateUpdatedEvent.Type;
+
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
@@ -737,6 +756,7 @@ export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSettingsUpdatedEvent,
   ServerConfigStreamEnvironmentThemesUpdatedEvent,
   ServerConfigStreamUsageLimitSourcesUpdatedEvent,
+  ServerConfigStreamForkUpdateUpdatedEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 
@@ -827,8 +847,9 @@ export const ServerSelfUpdateInput = Schema.Struct({
 });
 export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
 
-/** Acknowledgement that the update artifact is installed and the server is
-    about to restart into it — the connection will drop moments later. */
+/** Standard updates acknowledge a prepared artifact and an imminent restart.
+    Source-built fork updates acknowledge the background job only; its terminal
+    outcome is published through ServerConfig.forkUpdate. */
 export const ServerSelfUpdateResult = Schema.Struct({
   targetVersion: TrimmedNonEmptyString,
   method: ServerSelfUpdateMethod,

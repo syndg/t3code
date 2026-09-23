@@ -429,6 +429,57 @@ describe("RpcSessionFactory", () => {
     ),
   );
 
+  it.effect(
+    "keeps fork update receipts in replay and clears them when a server disables the feature",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const options = { forkUpdate: true };
+          const { factory, sockets } = yield* makeFactory(options);
+          const session = yield* factory.connect(PREPARED);
+          const ready = yield* Effect.forkChild(session.ready);
+          const socket = yield* awaitSocket(sockets);
+          socket.open();
+          yield* completeInitialConfig(socket, ENCODED_SERVER_CONFIG, options);
+          yield* Fiber.join(ready);
+          const observed = yield* Queue.unbounded<ServerConfigStreamEventType>();
+          yield* session.subscribeServerConfig(options).pipe(
+            Stream.runForEach((event) => Queue.offer(observed, event)),
+            Effect.forkChild,
+          );
+          yield* Queue.take(observed);
+          const completion: ServerConfigStreamEventType = {
+            version: 1,
+            type: "forkUpdateUpdated",
+            payload: {
+              state: {
+                status: "updated",
+                currentVersion: "1.0.0-nightly.20260923.1",
+                targetVersion: "1.0.0-nightly.20260923.1",
+              },
+            },
+          };
+          yield* publishConfigEvents(socket, [completion]);
+          expect(yield* Queue.take(observed)).toEqual(completion);
+          const replay = Option.getOrThrow(
+            yield* session.subscribeServerConfig(options).pipe(Stream.runHead),
+          );
+          expect(replay).toMatchObject({
+            type: "snapshot",
+            config: { forkUpdate: completion.payload.state },
+          });
+          yield* publishConfigEvents(socket, [
+            { version: 1, type: "snapshot", config: SERVER_CONFIG },
+          ]);
+          yield* Queue.take(observed);
+          const disabled = Option.getOrThrow(
+            yield* session.subscribeServerConfig(options).pipe(Stream.runHead),
+          );
+          expect(disabled.type === "snapshot" && disabled.config.forkUpdate).toBeUndefined();
+        }),
+      ),
+  );
+
   for (const options of [
     { environmentThemes: true },
     { usageLimitSources: true },

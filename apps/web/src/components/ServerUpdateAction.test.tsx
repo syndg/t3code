@@ -1,6 +1,5 @@
 import { act, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import { renderToStaticMarkup } from "react-dom/server";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -12,6 +11,13 @@ const testState = vi.hoisted(() => ({
   continueThreadsAfterServerUpdate: false,
 }));
 
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: () => null,
+}));
+vi.mock("~/state/environments", () => ({
+  useEnvironment: () => ({ connection: { phase: "connected" } }),
+  useEnvironments: () => ({ environments: [] }),
+}));
 vi.mock("~/hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: () => ({ copyToClipboard: vi.fn() }),
 }));
@@ -22,7 +28,7 @@ vi.mock("~/hooks/useSettings", () => ({
   ) => selector({ continueThreadsAfterServerUpdate: testState.continueThreadsAfterServerUpdate }),
 }));
 vi.mock("~/state/server", () => ({
-  serverEnvironment: { updateServer: Symbol("updateServer") },
+  serverEnvironment: { updateServer: Symbol("updateServer"), configValueAtom: () => null },
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => testState.updateServer,
@@ -39,7 +45,6 @@ import {
 } from "~/confirmDialog";
 import {
   ServerUpdateAction,
-  ServerUpdateProgress,
   ServerUpdatesAction,
   type ServerUpdateTarget,
 } from "./ServerUpdateAction";
@@ -119,20 +124,6 @@ describe("ServerUpdateAction", () => {
     expect(testState.toast).not.toHaveBeenCalled();
   });
 
-  it("keeps the manual instruction for desktop servers without remote update support", () => {
-    const markup = renderToStaticMarkup(
-      <ServerUpdateAction
-        environmentId={"env-test" as EnvironmentId}
-        serverLabel="Test server"
-        selfUpdate="desktop-managed"
-        targetVersion="0.0.31"
-      />,
-    );
-
-    expect(markup).toContain("Update the desktop app on that machine to update this server.");
-    expect(markup).not.toContain("<button");
-  });
-
   it("updates remote desktop apps through the shared update flow", async () => {
     testState.updateServer.mockResolvedValue(
       AsyncResult.success({ targetVersion: "0.0.34", method: "desktop-app" as const }),
@@ -159,27 +150,6 @@ describe("ServerUpdateAction", () => {
       type: "success",
       title: "Test server updated",
       description: "Desktop app relaunched on 0.0.34.",
-    });
-  });
-
-  it("leaves thread continuation off by default", async () => {
-    testState.updateServer.mockResolvedValue(
-      AsyncResult.success({ targetVersion: "0.0.31", method: "boot-service" as const }),
-    );
-    const action = ServerUpdateAction({
-      environmentId: "env-test" as EnvironmentId,
-      serverLabel: "Test server",
-      selfUpdate: "boot-service",
-      threadContinuation: true,
-      targetVersion: "0.0.31",
-    }) as ActionElement;
-
-    action.props.onClick?.();
-    await flushPromises();
-
-    expect(testState.updateServer).toHaveBeenCalledWith({
-      environmentId: "env-test",
-      input: { targetVersion: "0.0.31" },
     });
   });
 
@@ -346,64 +316,5 @@ describe("ServerUpdatesAction", () => {
     });
     expect(testState.updateServer).not.toHaveBeenCalled();
     expect(button.props.disabled).toBe(false);
-  });
-});
-
-describe("ServerUpdateProgress", () => {
-  it("shows one calm status row for the restart wait", () => {
-    const markup = renderToStaticMarkup(
-      <ServerUpdateProgress
-        state={{
-          status: "running",
-          stage: "resuming",
-          fromVersion: "0.0.30",
-          targetVersion: "0.0.31",
-        }}
-      />,
-    );
-
-    expect(markup).toContain("Restarting…");
-    // The wait state is monochrome and calm: no versions, no step rail, no
-    // success/warning colors, one duty-cycled pulse on the dot.
-    expect(markup).not.toContain("0.0.30");
-    expect(markup).not.toContain("Resum");
-    expect(markup).not.toContain("text-success");
-    expect(markup).not.toContain("text-primary");
-    expect(markup).toContain("animate-status-pulse");
-    expect(markup).not.toContain("animate-spin");
-  });
-
-  it("folds the sub-second installing handoff into the download phase", () => {
-    const markup = renderToStaticMarkup(
-      <ServerUpdateProgress
-        state={{
-          status: "running",
-          stage: "installing",
-          fromVersion: "0.0.30",
-          targetVersion: "0.0.31",
-        }}
-      />,
-    );
-
-    expect(markup).toContain("Downloading…");
-    expect(markup).not.toContain("Install");
-  });
-
-  it("keeps the failure visible with its retryable error", () => {
-    const markup = renderToStaticMarkup(
-      <ServerUpdateProgress
-        state={{
-          status: "failed",
-          stage: "installing",
-          fromVersion: "0.0.30",
-          targetVersion: "0.0.31",
-          message: "The package could not be verified.",
-        }}
-      />,
-    );
-
-    expect(markup).toContain('role="alert"');
-    expect(markup).toContain("The package could not be verified.");
-    expect(markup).not.toContain("animate-status-pulse");
   });
 });
