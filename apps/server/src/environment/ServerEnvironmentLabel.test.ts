@@ -61,6 +61,18 @@ afterEach(() => {
 });
 
 describe("resolveServerEnvironmentLabel", () => {
+  it.effect("uses an explicit environment label for a second server on the same machine", () =>
+    Effect.gen(function* () {
+      const result = yield* ServerEnvironmentLabel.resolveServerEnvironmentLabel({
+        cwdBaseName: "t3code",
+        overrideLabel: " invyte-vm-omp ",
+      }).pipe(Effect.provide(withHostPlatform(TestLayer, "linux", "invyte-vm")));
+
+      expect(result).toBe("invyte-vm-omp");
+      expect(runMock).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("uses hostname fallback regardless of launch mode", () =>
     Effect.gen(function* () {
       const result = yield* ServerEnvironmentLabel.resolveServerEnvironmentLabel({

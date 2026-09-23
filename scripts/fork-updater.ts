@@ -562,7 +562,9 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
           CI: "1",
           npm_config_engine_strict: "false",
           APP_VERSION: version,
-          VITE_HOSTED_APP_CHANNEL: "nightly",
+          // This build is served by the fork itself. A hosted channel makes the
+          // client skip its same-origin primary environment and appear empty.
+          VITE_HOSTED_APP_CHANNEL: "",
           T3CODE_HOME: NodePath.join(candidate, ".t3-validation"),
           ...Object.fromEntries(
             Object.entries(publicEnv).filter(([key]) =>
