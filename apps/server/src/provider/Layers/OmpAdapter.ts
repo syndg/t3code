@@ -62,6 +62,7 @@ const ResumeCursor = Schema.Struct({
   sessionId: Schema.NonEmptyString,
 });
 const decodeResumeCursor = Schema.decodeUnknownOption(ResumeCursor);
+const encodeProgressSignature = Schema.encodeSync(Schema.UnknownFromJsonString);
 const isAcpError = Schema.is(AcpErrors.AcpError);
 type Adapter = ProviderAdapterShape<ProviderAdapterError>;
 type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -390,7 +391,7 @@ export const makeOmpAdapter = Effect.fn("makeOmpAdapter")(function* (options: Om
               ? "cancelled"
               : child.status;
         const progressStatus = status === "pending" || status === "running" ? status : undefined;
-        const signature = JSON.stringify([
+        const signature = encodeProgressSignature([
           progressStatus,
           description,
           progressSummary,

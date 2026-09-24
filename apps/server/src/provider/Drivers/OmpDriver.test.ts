@@ -7,6 +7,8 @@ import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as AcpSchema from "effect-acp/schema";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
@@ -15,6 +17,9 @@ import { rewriteOmpSkillMentions } from "./OmpCommandCatalog.ts";
 import { OmpDriver, ompModelsFromConfigOptions } from "./OmpDriver.ts";
 
 const instanceId = ProviderInstanceId.make("omp-test");
+const encodeSessionUpdates = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(AcpSchema.SessionUpdate)),
+);
 const mockAgentPath = NodePath.join(
   NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
   "../../../scripts/acp-mock-agent.ts",
@@ -75,7 +80,7 @@ it.layer(layer)("OmpDriver", (it) => {
       const other = NodePath.join(directory, "other");
       yield* fs.makeDirectory(other);
       const binaryPath = NodePath.join(directory, "omp");
-      const otherUpdates = JSON.stringify([
+      const otherUpdates = encodeSessionUpdates([
         {
           sessionUpdate: "available_commands_update",
           availableCommands: [
@@ -96,7 +101,7 @@ it.layer(layer)("OmpDriver", (it) => {
         environment: [
           {
             name: "T3_ACP_DELAYED_STARTUP_UPDATES",
-            value: JSON.stringify([
+            value: encodeSessionUpdates([
               {
                 sessionUpdate: "available_commands_update",
                 availableCommands: [

@@ -14,6 +14,9 @@ import * as AcpError from "effect-acp/errors";
 import * as AcpSchema from "effect-acp/schema";
 
 const decodeSessionUpdates = Schema.decodeUnknownSync(Schema.Array(AcpSchema.SessionUpdate));
+const encodePrompt = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(AcpSchema.ContentBlock)),
+);
 
 const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
@@ -1355,7 +1358,7 @@ const program = Effect.gen(function* () {
             type: "text",
             text:
               process.env.T3_ACP_ECHO_PROMPT === "1"
-                ? JSON.stringify(request.prompt)
+                ? encodePrompt(request.prompt)
                 : (promptResponseText ?? "hello from mock"),
           },
         },
