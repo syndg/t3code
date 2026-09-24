@@ -62,7 +62,7 @@ const ResumeCursor = Schema.Struct({
   sessionId: Schema.NonEmptyString,
 });
 const decodeResumeCursor = Schema.decodeUnknownOption(ResumeCursor);
-const encodeProgressSignature = Schema.encodeSync(Schema.UnknownFromJsonString);
+const encodeProgressSignature = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const isAcpError = Schema.is(AcpErrors.AcpError);
 type Adapter = ProviderAdapterShape<ProviderAdapterError>;
 type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
