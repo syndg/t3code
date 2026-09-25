@@ -1,3 +1,4 @@
+import { LockIcon, LockOpenIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { isThemeColor, themeColorToHex, type ThemeColorRole } from "../../themePalette";
 import { cn } from "../../lib/utils";
@@ -5,6 +6,7 @@ import { hexToHsv, hsvToHex, type HsvColor } from "../../lib/color";
 import { ColorHueSlider, ColorSaturationValuePlane } from "../ui/color-picker";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export function getThemeRoleLabel(role: ThemeColorRole): string {
   const labels: Partial<Record<ThemeColorRole, string>> = {
@@ -303,6 +305,8 @@ export const ThemeColorField = memo(function ThemeColorField({
   onToggleSelected,
   selected = false,
   label: customLabel,
+  locked = false,
+  onLockedChange,
 }: {
   role: ThemeColorRole;
   value: string;
@@ -311,6 +315,9 @@ export const ThemeColorField = memo(function ThemeColorField({
   onToggleSelected?: (role: ThemeColorRole) => void;
   selected?: boolean;
   label?: string;
+  /** Shows a lock that keeps this color when the editor shuffles. */
+  locked?: boolean;
+  onLockedChange?: (role: ThemeColorRole, locked: boolean) => void;
 }) {
   const label = customLabel ?? getThemeRoleLabel(role);
   const isColorValue = isThemeColor(value);
@@ -344,6 +351,26 @@ export const ThemeColorField = memo(function ThemeColorField({
         <TooltipPopup side="top">{`${selected ? "Hide" : "Show"} where ${label} is used`}</TooltipPopup>
       </Tooltip>
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {onLockedChange ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={`${locked ? "Unlock" : "Lock"} ${label} when shuffling`}
+                  onPressedChange={(pressed) => onLockedChange(role, Boolean(pressed))}
+                  pressed={locked}
+                  size="xs"
+                  variant="ghost"
+                />
+              }
+            >
+              {locked ? <LockIcon /> : <LockOpenIcon />}
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {locked ? `Shuffle keeps ${label}` : `Keep ${label} when shuffling`}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
         <ThemeColorPicker
           label={label}
           onChange={(nextValue) => onChange(role, nextValue)}
