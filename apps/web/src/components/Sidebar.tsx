@@ -1931,7 +1931,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <MiddleTruncate
                     value={thread.branch}
                     showTitle={false}
-                    className="flex-1 text-muted-foreground/40"
+                    className="flex-1 text-sidebar-muted-foreground/70"
                   />
                 </>
               ) : (

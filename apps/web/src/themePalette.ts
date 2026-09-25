@@ -707,11 +707,13 @@ export function createVividThemeColors(
   const textMutedRgb = standardMutedThemeText(canvasRgb, textRgb);
 
   // The companion action rotates off the accent so a two-color theme still
-  // gets the dual-voice character of the hand-tuned palettes.
+  // gets the dual-voice character of the hand-tuned palettes. A neutral canvas
+  // has no second hue to pair with, so there the rotation reads as a
+  // mismatched accent and the action keeps the accent hue instead.
   const action: ThemeOklch = {
     L: Math.min(0.85, Math.max(0.35, accent.L + (dark ? 0.06 : -0.02))),
     C: Math.max(accent.C * 0.9, 0.06),
-    h: (hue + 50) % 360,
+    h: canvas.C < 0.01 ? hue : (hue + 50) % 360,
   };
   const actionRgb = themeOklchToRgb(action);
   const actionForeground = readableThemeForeground(actionRgb);

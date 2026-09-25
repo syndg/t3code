@@ -183,6 +183,15 @@ describe("theme files", () => {
     }
   });
 
+  it("keeps the accent hue for the companion action on a neutral canvas", () => {
+    const hueOf = (value: string) => Number(/^oklch\(\S+ \S+ (\S+)\)$/.exec(value)?.[1]);
+    const neutral = createVividThemeColors("dark", "#09090b", "#216339");
+    const tinted = createVividThemeColors("dark", "#101a2c", "#216339");
+
+    expect(Math.abs(hueOf(neutral.messageAction) - hueOf(neutral.accent))).toBeLessThan(1);
+    expect(Math.abs(hueOf(tinted.messageAction) - hueOf(tinted.accent))).toBeGreaterThan(40);
+  });
+
   it("keys status colors off the canvas, not the appearance slot", () => {
     // Inverted seeds: a dark canvas in the light slot must still get the dark
     // status pair, or the alert foreground lands on a dark surface unreadable.
