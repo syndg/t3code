@@ -4,6 +4,8 @@ import {
   MousePointer2Icon,
   PaintbrushIcon,
   PlusIcon,
+  ShuffleIcon,
+  Undo2Icon,
   XIcon,
 } from "lucide-react";
 import {
@@ -34,6 +36,7 @@ import {
   type ThemeColorRole,
   type ThemeDefinition,
 } from "../../themePalette";
+import { shuffleThemeSeeds, type ThemeSeedLocks } from "../../themeShuffle";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -310,6 +313,14 @@ export function ThemeEditorPanel({
     Record<ThemeAppearance, boolean>
   >({ light: false, dark: false });
   const [shouldRegenerateGuidedColors, setShouldRegenerateGuidedColors] = useState(false);
+  const [seedLocks, setSeedLocks] = useState<ThemeSeedLocks>({ canvas: false, accent: false });
+  // One step back from the last shuffle. Any manual color edit drops it, so
+  // undo can never discard work done after the shuffle.
+  const [shuffleUndo, setShuffleUndo] = useState<{
+    appearance: ThemeAppearance;
+    colors: ThemeEditorColors;
+    dirty: boolean;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isMinimized, setIsMinimized] = useState(false);
   const [roleQuery, setRoleQuery] = useState("");
@@ -407,6 +418,8 @@ export function ThemeEditorPanel({
       // guided editor. Merely revealing Advanced for a managed/default draft
       // must stay read-only until a color changes.
       setShouldRegenerateGuidedColors(sourceTheme !== null && sourceTheme.managed !== true);
+      setSeedLocks({ canvas: false, accent: false });
+      setShuffleUndo(null);
       setColorsByAppearance(nextColors);
       setSelectedRole(null);
       setUsageCount(null);
@@ -504,9 +517,44 @@ export function ThemeEditorPanel({
         }));
       }
       if (isAdvanced) setShouldRegenerateGuidedColors(true);
+      setShuffleUndo(null);
     },
     [activeAppearance, isAdvanced],
   );
+
+  const setSeedLocked = useCallback((role: ThemeColorRole, locked: boolean) => {
+    if (role !== "canvas" && role !== "accent") return;
+    setSeedLocks((current) => ({ ...current, [role]: locked }));
+  }, []);
+
+  // Shuffle only feeds new seeds to the guided generator; Advanced mode never
+  // offers it, so hand-tuned colors cannot be replaced.
+  const handleShuffle = () => {
+    const colors = colorsByAppearance[activeAppearance];
+    const seeds = shuffleThemeSeeds(activeAppearance, colors, seedLocks);
+    if (!seeds) return;
+    setShuffleUndo({
+      appearance: activeAppearance,
+      colors,
+      dirty: simpleColorsDirtyByAppearance[activeAppearance],
+    });
+    setColorsByAppearance((current) => ({
+      ...current,
+      [activeAppearance]: getManagedEditorColors(activeAppearance, {
+        ...current[activeAppearance],
+        ...seeds,
+      }),
+    }));
+    setSimpleColorsDirtyByAppearance((current) => ({ ...current, [activeAppearance]: true }));
+  };
+
+  const handleUndoShuffle = () => {
+    if (!shuffleUndo) return;
+    const { appearance, colors, dirty } = shuffleUndo;
+    setColorsByAppearance((current) => ({ ...current, [appearance]: colors }));
+    setSimpleColorsDirtyByAppearance((current) => ({ ...current, [appearance]: dirty }));
+    setShuffleUndo(null);
+  };
 
   const selectThemeRole = useCallback((role: ThemeColorRole, reveal = false) => {
     const visibleRole = getThemeEditorColorFamily(role)?.role ?? role;
@@ -1066,7 +1114,9 @@ export function ThemeEditorPanel({
         {THEME_EDITOR_SIMPLE_ROLES.map((role) => (
           <ThemeColorField
             key={role}
+            locked={role === "canvas" ? seedLocks.canvas : seedLocks.accent}
             onChange={updateColor}
+            onLockedChange={setSeedLocked}
             onSelect={selectThemeRole}
             onToggleSelected={toggleThemeRole}
             role={role}
@@ -1075,6 +1125,23 @@ export function ThemeEditorPanel({
             value={colorsByAppearance[activeAppearance][role]}
           />
         ))}
+        <div className="flex items-center justify-end gap-2 px-2">
+          {shuffleUndo?.appearance === activeAppearance ? (
+            <Button size="xs" variant="ghost" onClick={handleUndoShuffle}>
+              <Undo2Icon />
+              Undo
+            </Button>
+          ) : null}
+          <Button
+            disabled={seedLocks.canvas && seedLocks.accent}
+            size="xs"
+            variant="outline"
+            onClick={handleShuffle}
+          >
+            <ShuffleIcon />
+            Shuffle
+          </Button>
+        </div>
       </div>
     );
   };
