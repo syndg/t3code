@@ -4,9 +4,11 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as AcpErrors from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -26,6 +28,7 @@ import {
 } from "../ProviderDriver.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
+import { loadOmpMcpServers } from "./OmpMcpServers.ts";
 
 const DRIVER = ProviderDriverKind.make("omp");
 const decodeSettings = Schema.decodeSync(OmpSettings);
@@ -36,6 +39,7 @@ export type OmpDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
+  | Path.Path
   | ServerConfig
   | ServerSettingsService;
 
@@ -87,6 +91,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const settings = { ...config, enabled } satisfies OmpSettings;
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -100,13 +105,24 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
-      const makeRuntime = (
+      const makeRuntime = Effect.fn("OmpDriver.makeRuntime")(function* (
         sessionCwd: string,
         resumeSessionId?: string,
         approvalMode?: string,
         mcpServers?: ReadonlyArray<AcpSchema.McpServer>,
-      ) =>
-        AcpSessionRuntime.make({
+      ) {
+        // Probes and title generation have no host MCP list and do not need work integrations.
+        const servers =
+          mcpServers === undefined
+            ? []
+            : yield* loadOmpMcpServers(processEnv, sessionCwd, mcpServers).pipe(
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.provideService(Path.Path, path),
+                Effect.mapError(
+                  (cause) => new AcpErrors.AcpSpawnError({ command: settings.binaryPath, cause }),
+                ),
+              );
+        return yield* AcpSessionRuntime.make({
           spawn: {
             command: settings.binaryPath,
             args: ["acp", ...(approvalMode ? [`--approval-mode=${approvalMode}`] : [])],
@@ -121,12 +137,12 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
             fs: { readTextFile: false, writeTextFile: false },
             terminal: false,
           },
-          mcpServers: mcpServers ?? [],
+          mcpServers: servers,
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
-
+      });
       const buildSnapshot = (input: {
         installed: boolean;
         version: string | null;
