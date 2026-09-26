@@ -233,6 +233,32 @@ export async function activateForkBuild(input: {
   }
 }
 
+/**
+ * Picks the fork commit the nightly merges into. Work pushed straight to the
+ * deployment branch is fork work too, so a branch that already contains the
+ * active build becomes the base instead of being overwritten by it.
+ */
+export async function resolveForkSource(
+  directory: string,
+  active: string,
+  deployed: string | undefined,
+): Promise<string> {
+  if (deployed === undefined || deployed === active) return active;
+  const run = commandRunner(() => {});
+  const contains = async (ancestor: string, descendant: string) =>
+    (
+      await run("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+        cwd: directory,
+        allowFailure: true,
+      })
+    ).code === 0;
+  if (await contains(active, deployed)) return deployed;
+  if (await contains(deployed, active)) return active;
+  throw new Error(
+    `The deployment branch (${deployed}) and the active build (${active}) have diverged. Merge the active build into the branch before updating so publishing drops neither.`,
+  );
+}
+
 export async function assertForkAncestry(
   directory: string,
   source: string,
@@ -515,15 +541,7 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
     if ((await run("git", ["status", "--porcelain"], { cwd: previous })).stdout) {
       throw new Error("The active release source has uncommitted changes.");
     }
-    const source = (await run("git", ["rev-parse", "HEAD"], { cwd: previous })).stdout;
-    for (const required of [
-      "scripts/fork-updater.ts",
-      "packages/shared/src/forkUpdater.ts",
-      "apps/server/src/provider/Drivers/OmpDriver.ts",
-      "apps/server/src/provider/Layers/OmpAdapter.ts",
-    ]) {
-      await run("git", ["cat-file", "-e", `${source}:${required}`], { cwd: config.repository });
-    }
+    const activeBuild = (await run("git", ["rev-parse", "HEAD"], { cwd: previous })).stdout;
     const env = forkCodexEnvironment(process.env);
     env.PATH = `${NodePath.dirname(config.nodeBinary)}:${env.PATH ?? "/usr/bin:/bin"}`;
     const login = await run(config.codexBinary, ["login", "status"], {
@@ -536,7 +554,7 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
         "Codex must be logged in with the existing ChatGPT subscription, not an API key.",
       );
     const candidate = await NodeFSP.mkdtemp(NodePath.join(releases, `${version}-`));
-    await run("git", ["worktree", "add", "--detach", candidate, source], {
+    await run("git", ["worktree", "add", "--detach", candidate, activeBuild], {
       cwd: config.repository,
     });
     const git = (args: readonly string[], allowFailure = false) =>
@@ -545,6 +563,27 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
         env,
         allowFailure,
       });
+    let deployedHead: string | undefined;
+    if (config.webDeployment) {
+      const { gitRemote, gitBranch } = config.webDeployment;
+      const fetched = await git(["fetch", "--no-tags", gitRemote, `refs/heads/${gitBranch}`], true);
+      // A missing branch is the first deployment; any other failure must stop
+      // the update rather than risk publishing over commits it could not see.
+      if (fetched.code === 0)
+        deployedHead = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).stdout;
+      else if (!/couldn't find remote ref/i.test(fetched.stderr))
+        throw new Error(`Could not fetch the ${gitBranch} deployment branch: ${fetched.stderr}`);
+    }
+    const source = await resolveForkSource(candidate, activeBuild, deployedHead);
+    if (source !== activeBuild) await git(["checkout", "--detach", source]);
+    for (const required of [
+      "scripts/fork-updater.ts",
+      "packages/shared/src/forkUpdater.ts",
+      "apps/server/src/provider/Drivers/OmpDriver.ts",
+      "apps/server/src/provider/Layers/OmpAdapter.ts",
+    ]) {
+      await git(["cat-file", "-e", `${source}:${required}`]);
+    }
     await git(["fetch", "--no-tags", FORK_UPSTREAM_REPOSITORY, `refs/tags/v${version}`]);
     const target = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).stdout;
     const merge = await git(["merge", "--no-ff", "--no-commit", target], true);
@@ -773,14 +812,10 @@ export async function runForkUpdater(config: ForkUpdaterConfig, version: string)
           const web = config.webDeployment;
           const commit = (await git(["rev-parse", "HEAD"])).stdout;
           const branchRef = `refs/heads/${web.gitBranch}`;
-          const remoteHead =
-            (await git(["ls-remote", web.gitRemote, branchRef])).stdout.split(/\s+/)[0] ?? "";
-          await git([
-            "push",
-            `--force-with-lease=${branchRef}:${remoteHead}`,
-            web.gitRemote,
-            `HEAD:${branchRef}`,
-          ]);
+          // HEAD descends from the branch fetched before the merge, so this only
+          // fast-forwards. A commit pushed meanwhile rejects the push instead of
+          // being overwritten.
+          await git(["push", web.gitRemote, `HEAD:${branchRef}`]);
           const deadline = Date.now() + 15 * 60_000;
           let deployed = false;
           while (Date.now() < deadline) {

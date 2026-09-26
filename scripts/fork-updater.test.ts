@@ -17,6 +17,7 @@ import {
   assertPublishedForkNightly,
   assertStagedForkDiff,
   forkCodexEnvironment,
+  resolveForkSource,
   validateForkWithRepairs,
 } from "./fork-updater.ts";
 
@@ -167,6 +168,35 @@ it("requires both the fork source and exact nightly ancestry in a real git workt
   await assertForkAncestry(fixture.root, fork, nightly);
   git("checkout", "nightly");
   await expect(assertForkAncestry(fixture.root, fork, nightly)).rejects.toThrow("must descend");
+});
+
+it("builds on deployment branch commits instead of publishing over them", async () => {
+  const fixture = await deploymentFixture();
+  const git = (...args: string[]) =>
+    NodeChildProcess.execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: fixture.root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Updater test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Updater test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    }).trim();
+  git("init", "--initial-branch=main");
+  git("commit", "--allow-empty", "-m", "active fork build");
+  const active = git("rev-parse", "HEAD");
+  git("commit", "--allow-empty", "-m", "feature pushed to the deployment branch");
+  const deployed = git("rev-parse", "HEAD");
+  expect(await resolveForkSource(fixture.root, active, undefined)).toBe(active);
+  expect(await resolveForkSource(fixture.root, active, active)).toBe(active);
+  expect(await resolveForkSource(fixture.root, active, deployed)).toBe(deployed);
+  expect(await resolveForkSource(fixture.root, deployed, active)).toBe(deployed);
+  git("checkout", "--detach", active);
+  git("commit", "--allow-empty", "-m", "repair activated outside the branch");
+  const diverged = git("rev-parse", "HEAD");
+  await expect(resolveForkSource(fixture.root, diverged, deployed)).rejects.toThrow("diverged");
 });
 
 it("ignores whitespace already in the published nightly but rejects fork whitespace", async () => {
